@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+
+# images contain people from the match videos - keep only the calibration data (json/csv)
+out/*.jpg
+*.mp4
+*.mov
