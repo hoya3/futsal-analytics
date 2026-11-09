@@ -1,4 +1,4 @@
-"""Measure the real center circle (radius, center) from each camera: trace the white ring, map to court meters, fit a circle."""
+"""각 카메라에서 실제 센터 서클(반지름, 중심)을 측정: 흰 원을 따라가 코트 미터로 매핑한 뒤 원을 피팅한다."""
 import json
 import sys
 
@@ -18,12 +18,12 @@ def fit_circle(p):
 for n in (1, 2):
     suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
     d = json.load(open(f"out/H_cam{n}{suffix}.json"))
-    H = np.array(d["H_near"])  # the circle straddles the halfway line; both homographies share it
+    H = np.array(d["H_near"])  # 서클이 하프라인에 걸쳐 있고, 두 호모그래피가 하프라인을 공유한다
     Hc2i = front_facing(np.linalg.inv(H))
     ridge = cv2.GaussianBlur(ridge_map(cv2.imread(f"out/frame_cam{n}.jpg")), (0, 0), 1.5)
     pts = []
     for th in np.radians(np.arange(0, 360, 3)):
-        rs = np.linspace(1.8, 4.2, 97)  # search radii (m) around the assumed 3 m ring
+        rs = np.linspace(1.8, 4.2, 97)  # 가정한 3 m 원 주변의 탐색 반지름 (m)
         world = np.c_[rs * np.cos(th), rs * np.sin(th)]
         px, depth = project(Hc2i, world)
         if (depth <= 0).any() or (px < 5).any() or (px[:, 0] > 1914).any() or (px[:, 1] > 1074).any():

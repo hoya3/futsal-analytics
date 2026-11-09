@@ -79,8 +79,10 @@ python refine.py
 from court_map import load, pixel_to_court
 
 cam1 = load(1)                                        # refined 캘리브레이션 우선
-xy = pixel_to_court(cam1, [[960, 700], [1200, 300]])  # (N, 2) 코트 좌표, 미터
+xy = pixel_to_court(cam1, [[960, 700], [1200, 300]], t=61.2)  # (N, 2) 코트 좌표, 미터
 ```
+
+`t`는 **동기화 영상(`*_sync.mp4`)의 시각(초)** 입니다. 경기 중 카메라가 밀리므로 `track.py`가 구간별 호모그래피를 만들고, `t`로 구간을 고릅니다. 코트를 확정하지 못한 구간의 점은 NaN입니다. 원본 영상 시각이 필요하면 `load_source`를 씁니다.
 
 ### 4. 선수 위치 시각화 (`plot_players.py`)
 

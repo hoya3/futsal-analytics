@@ -1,151 +1,56 @@
-"""Mouse-only court calibration: 5 clicks per camera, all on the camera's own (near) half.
+"""마우스만으로 하는 코트 캘리브레이션: 카메라당 5번 클릭, 모두 카메라 쪽(가까운) 하프에서.
 
-A single homography cannot fit both halves (the camera is low, so slight unevenness of the outdoor court shifts the
-far half), so each camera gets
-  H_near: image px -> court m, valid on the camera's own half (where it tracks players) - from the 5 clicks
-  H_far:  image px -> court m, valid beyond the halfway line (fills the spots the other camera cannot see).
-          Starts as H_near; refine.py fits it to the white lines while keeping every point of the halfway line
-          where H_near puts it, so both agree along the whole halfway line.
+호모그래피 하나로는 두 하프를 다 맞출 수 없으므로(카메라가 낮아서 야외 코트의 약간의 굴곡에도 먼 하프가
+어긋남) 카메라마다 두 개를 둔다
+  H_near: 이미지 px -> 코트 m, 카메라 쪽 하프(선수를 추적하는 영역)에서 유효 - 5번의 클릭으로 구함
+  H_far:  이미지 px -> 코트 m, 하프라인 너머에서 유효(다른 카메라가 못 보는 곳을 채움).
+          처음엔 H_near와 같고, refine.py가 하프라인 위의 모든 점은 H_near가 놓은 자리에 고정한 채
+          흰 선에 맞추므로, 두 호모그래피가 하프라인 전체에서 일치한다.
 
-Usage: python calibrate.py camera1.mp4 camera2.mp4      (images also work; "-" skips a camera, e.g. - camera2.mp4)
-  Starts at t=60 s (the phones moved during the first ~30 s of the videos). Pick a frame where nobody hides the
-  landmarks: a/d = -/+ 10 s, z/c = -/+ 1 s (only before the first click).
-  Left/right are as seen in the picture. The minimap (bottom-left) shows the next point in red.
-  "half" = which goal the camera faces: cam1 faces the east goal (x=+20), cam2 the west goal (x=-20); h flips it.
-Keys: left click = place the red point, u = undo, h = flip facing (before first click), m = hide/show help,
-      Enter = accept, q = quit.
-Output per camera: out/H_cam<N>.json, out/frame_cam<N>.jpg, out/H_cam<N>_overlay.jpg. Run refine.py afterwards.
+사용법: python calibrate.py camera1.mp4 camera2.mp4      (이미지도 가능; "-"는 해당 카메라 건너뜀, 예: - camera2.mp4)
+  t=60 s에서 시작(영상 처음 ~30 s 동안 폰이 움직였음). 랜드마크를 아무도 가리지 않는 프레임을 고른다:
+  a/d = -/+ 10 s, z/c = -/+ 1 s (첫 클릭 전에만).
+  좌/우는 화면에 보이는 기준. 미니맵(왼쪽 아래)에 다음 점이 빨간색으로 표시된다.
+  "half" = 카메라가 바라보는 골대: cam1은 동쪽 골대(x=+20), cam2는 서쪽 골대(x=-20); h로 뒤집는다.
+키: 왼쪽 클릭 = 빨간 점 찍기, u = 되돌리기, h = 방향 뒤집기(첫 클릭 전), m = 도움말 숨기기/보이기,
+    Enter = 확정, q = 종료.
+카메라별 출력: out/H_cam<N>.json, out/frame_cam<N>.jpg, out/H_cam<N>_overlay.jpg. 그다음 refine.py를 실행한다.
 """
 import json
 import os
 import sys
+from dataclasses import asdict
 
 import cv2
 import numpy as np
-from scipy.optimize import least_squares
 
-from court import CENTER_R, L, W, court_lines
-
-HALF_SIGN = {"east": 1, "west": -1}
-
-# Court coordinates for a camera facing the EAST goal: x along the court (camera side x<0), y = left in the picture.
-# kind "point": an exact landmark. kind "line": any point on the right sideline (y = -W/2); its position along the
-# line is solved for, so it does not need a marking. xy of a "line" click is only the starting guess.
-# Near half = 4 points + 1 sideline point = exactly the 8 constraints a homography needs. (A second sideline point
-# would add nothing: the halfway line's right end already lies on that sideline.)
-LANDMARKS = [
-    {"name": "halfway line, left end", "kind": "point", "xy": (0.0, W / 2), "halves": ("near", "far")},
-    {"name": "center circle x halfway line, right crossing", "kind": "point", "xy": (0.0, -CENTER_R), "halves": ("near",)},
-    {"name": "halfway line, right end", "kind": "point", "xy": (0.0, -W / 2), "halves": ("near", "far")},
-    {"name": "right sideline: any point low in the picture", "kind": "line", "xy": (-14.0, -W / 2), "halves": ("near",)},
-    {"name": "10 m spot (small white dot)", "kind": "point", "xy": (-10.0, 0.0), "halves": ("near",)},
-]
-
-
-def to_world(xy, half):
-    """East-facing coordinates -> real court coordinates (a west-facing camera sees the court rotated 180 degrees)."""
-    x, y = xy
-    return (x, y) if half == "east" else (-x, -y)
-
-
-def in_half(pts, half, region, margin=0.0):
-    """Mask of court points on the camera's near half (x*sign <= margin) or far half (x*sign >= -margin)."""
-    s = HALF_SIGN[half] * np.asarray(pts)[:, 0]
-    return s <= margin if region == "near" else s >= -margin
-
-
-def solve_half(img_pts, lms, half):
-    """Homography (image -> court) from point and sideline clicks. Returns (H, solved world points, errors in m)."""
-    img = np.asarray(img_pts, float)
-    guess = np.array([to_world(lm["xy"], half) for lm in lms])
-    H0, _ = cv2.findHomography(img, guess, 0)
-    line_idx = [i for i, lm in enumerate(lms) if lm["kind"] == "line"]
-
-    def unpack(p):
-        H = np.append(p[:8], 1.0).reshape(3, 3)
-        world = guess.copy()
-        for k, i in enumerate(line_idx):  # slide along the sideline y = -W/2 (east-facing coordinates)
-            world[i] = to_world((p[8 + k], -W / 2), half)
-        return H, world
-
-    def residuals(p):
-        H, world = unpack(p)
-        return (cv2.perspectiveTransform(img[None].astype(np.float64), H)[0] - world).ravel()
-
-    p0 = np.r_[(H0 / H0[2, 2]).ravel()[:8], [lms[i]["xy"][0] for i in line_idx]]
-    sol = least_squares(residuals, p0, x_scale="jac")
-    H, world = unpack(sol.x)
-    err = np.linalg.norm(sol.fun.reshape(-1, 2), axis=1)
-    return H, world, err
-
-
-def front_facing(Hc2i):
-    """A homography is defined up to scale/sign; make the center spot (0,0) lie in front of the camera."""
-    return Hc2i if Hc2i[2, 2] > 0 else -Hc2i
-
-
-def draw_lines(view, H_img2court, keep, color=(0, 0, 255), thickness=2):
-    """Draw the court markings for which keep(points) is true, through inv(H)."""
-    Hc2i = front_facing(np.linalg.inv(H_img2court))
-    for line in court_lines():
-        dense = np.concatenate([np.linspace(a, b, 40, endpoint=False) for a, b in zip(line[:-1], line[1:])])
-        q = np.c_[dense, np.ones(len(dense))] @ Hc2i.T
-        ok = keep(dense) & (q[:, 2] > 0)
-        px = q[:, :2] / q[:, 2:3]
-        ok &= np.isfinite(px).all(1) & (np.abs(px) < 1e5).all(1)
-        for run in np.split(np.arange(len(dense)), np.where(~ok)[0]):  # draw each continuous visible run
-            run = run[ok[run]]
-            if len(run) > 1:
-                cv2.polylines(view, [px[run].astype(np.int32)], False, color, thickness)
-
-
-def draw_overlay(frame, H_near, H_far, half):
-    view = frame.copy()
-    draw_lines(view, H_near, lambda p: in_half(p, half, "near"))
-    draw_lines(view, H_far, lambda p: in_half(p, half, "far"))
-    return view
-
-
-class Source:
-    """A video (seekable) or a single image."""
-
-    def __init__(self, path):
-        self.is_video = path.lower().endswith((".mp4", ".mov", ".mkv", ".avi"))
-        if self.is_video:
-            self.cap = cv2.VideoCapture(path)
-            self.duration = self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.cap.get(cv2.CAP_PROP_FPS)
-        else:
-            self.image = cv2.imread(path)
-
-    def frame_at(self, t):
-        if not self.is_video:
-            return self.image
-        self.cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-        ok, frame = self.cap.read()
-        return frame if ok else None
+from calib_core import Source, click_landmarks, draw_overlay, solve_half
+from court import DEFAULT_SPEC, CourtSpec, court_lines
 
 
 class Calibrator:
-    def __init__(self, frame, half):
+    def __init__(self, frame, half, spec=DEFAULT_SPEC):
         self.frame = frame
         self.half = half
+        self.spec = spec
+        self.lms = click_landmarks(spec)
         self.t = 0.0
         self.show_map = True
-        self.mouse = None  # last cursor position, for the magnifier
+        self.mouse = None  # 돋보기용 마지막 커서 위치
         self.clicks = []
         self.result = None  # {"near": (H, world, err), "far": (H, world, err)}
 
     @property
     def done(self):
-        return len(self.clicks) == len(LANDMARKS)
+        return len(self.clicks) == len(self.lms)
 
     def _solve(self):
         if not self.done:
             return
-        idx = list(range(len(LANDMARKS)))
-        H, world, err = solve_half(self.clicks, LANDMARKS, self.half)
+        idx = list(range(len(self.lms)))
+        H, world, err = solve_half(self.clicks, self.lms, self.half, self.spec)
         near = (H, dict(zip(idx, world)), dict(zip(idx, err)))
-        far_idx = [i for i, lm in enumerate(LANDMARKS) if "far" in lm["halves"]]  # anchors for the far-half fit
+        far_idx = [i for i, lm in enumerate(self.lms) if "far" in lm["halves"]]  # 먼 하프 피팅의 앵커
         self.result = {"near": near, "far": (H, {i: near[1][i] for i in far_idx}, {i: near[2][i] for i in far_idx})}
 
     def click(self, x, y):
@@ -163,17 +68,18 @@ class Calibrator:
             self.half = "west" if self.half == "east" else "east"
 
     def _minimap(self, view):
-        x0, w, h = 20, 120, 240  # the whole court as the camera sees it: far goal on top, its own goal at the bottom
+        x0, w, h = 20, 120, 240  # 카메라가 보는 방향의 코트 전체: 먼 골대가 위, 카메라 쪽 골대가 아래
+        L, W = self.spec.length, self.spec.width
         y0 = view.shape[0] - h - 110
         cv2.rectangle(view, (x0 - 10, y0 - 10), (x0 + 640, y0 + h + 100), (0, 0, 0), -1)
 
         def to_map(x, y):
             return int(x0 + (W / 2 - y) / W * w), int(y0 + (L / 2 - x) / L * h)
 
-        for line in court_lines():
+        for line in court_lines(self.spec):
             cv2.polylines(view, [np.array([to_map(x, y) for x, y in line], np.int32)], False, (130, 130, 130), 1)
         i_next = len(self.clicks)
-        for i, lm in enumerate(LANDMARKS):
+        for i, lm in enumerate(self.lms):
             px, py = to_map(*lm["xy"])
             color = (0, 200, 0) if i < i_next else (0, 0, 255) if i == i_next else (200, 200, 200)
             cv2.circle(view, (px, py), 8, color, -1)
@@ -182,17 +88,17 @@ class Calibrator:
         if self.done:
             msg = "Enter: accept   u: undo"
         else:
-            msg = f"click {i_next + 1}/{len(LANDMARKS)}: {LANDMARKS[i_next]['name']}"
+            msg = f"click {i_next + 1}/{len(self.lms)}: {self.lms[i_next]['name']}"
         cv2.putText(view, f"facing the {self.half} goal", (tx, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(view, msg, (tx, y0 + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        if not self.done and LANDMARKS[i_next]["kind"] == "line":
+        if not self.done and self.lms[i_next]["kind"] == "line":
             cv2.putText(view, "(anywhere ON the line - no marking needed)", (tx, y0 + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
         cv2.putText(view, f"t={self.t:.0f}s  a/d: -/+10s  z/c: -/+1s (before clicking)", (tx, y0 + h + 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
     def render(self):
         if self.result:
-            view = draw_overlay(self.frame, self.result["near"][0], self.result["far"][0], self.half)
+            view = draw_overlay(self.frame, self.result["near"][0], self.result["far"][0], self.half, self.spec)
         else:
             view = self.frame.copy()
         for i, c in enumerate(self.clicks):
@@ -204,7 +110,7 @@ class Calibrator:
         return view
 
     def _magnifier(self, view, half_size=40, zoom=5):
-        """Zoomed view of the area under the cursor (opposite side of the screen), so far corners can be clicked to the pixel."""
+        """커서 아래 영역을 확대해 화면 반대편에 보여준다. 먼 코너도 픽셀 단위로 클릭할 수 있게."""
         if self.mouse is None:
             return
         x, y = self.mouse
@@ -216,13 +122,13 @@ class Calibrator:
         cv2.line(big, (cx, 0), (cx, big.shape[0]), (0, 255, 255), 1)
         cv2.line(big, (0, cy), (big.shape[1], cy), (0, 255, 255), 1)
         cv2.rectangle(big, (0, 0), (big.shape[1] - 1, big.shape[0] - 1), (255, 255, 255), 2)
-        bx = 10 if x > w // 2 else w - 10 - big.shape[1]  # opposite side of the cursor, below the far court edge
+        bx = 10 if x > w // 2 else w - 10 - big.shape[1]  # 커서 반대편, 먼 코트 끝선 아래
         view[200:200 + big.shape[0], bx:bx + big.shape[1]] = big
 
     def to_json(self, video=None):
         return {
-            "half": self.half, "video": video, "t_sec": self.t,
-            "names": [lm["name"] for lm in LANDMARKS],
+            "half": self.half, "video": video, "t_sec": self.t, "spec": asdict(self.spec),
+            "names": [lm["name"] for lm in self.lms],
             "img_pts": [list(map(float, c)) for c in self.clicks],
             "world": {region: {str(i): list(map(float, p)) for i, p in self.result[region][1].items()} for region in ("near", "far")},
             "H_near": self.result["near"][0].tolist(),
@@ -236,9 +142,9 @@ class Calibrator:
         cv2.imwrite(out_json.replace(".json", "_overlay.jpg"), self.render())
 
 
-def run_camera(n, path, half, t=60.0):  # both phones were still being adjusted during the first ~30 s
+def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC):  # 처음 ~30 s 동안은 두 폰 모두 아직 조정 중이었음
     src = Source(path)
-    cal = Calibrator(src.frame_at(t), half)
+    cal = Calibrator(src.frame_at(t), half, spec)
     cal.t = t
     win = f"cam{n} - {os.path.basename(path)}"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
@@ -277,8 +183,14 @@ def run_camera(n, path, half, t=60.0):  # both phones were still being adjusted 
 
 
 if __name__ == "__main__":
-    for n, (path, half) in enumerate(zip(sys.argv[1:3], ("east", "west")), start=1):
-        if path == "-":  # keep this camera's existing calibration
+    args = sys.argv[1:]
+    spec = DEFAULT_SPEC
+    if "--court" in args:  # 예: --court 38x18 (길이x폭, 미터)
+        i = args.index("--court")
+        spec = CourtSpec(*map(float, args[i + 1].lower().split("x")))
+        del args[i:i + 2]
+    for n, (path, half) in enumerate(zip(args[:2], ("east", "west")), start=1):
+        if path == "-":  # 이 카메라의 기존 캘리브레이션 유지
             continue
-        if not run_camera(n, path, half):
+        if not run_camera(n, path, half, spec=spec):
             break

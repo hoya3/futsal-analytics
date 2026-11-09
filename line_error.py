@@ -1,8 +1,8 @@
-"""How far (in meters) are the white lines from the model lines, per camera and per half?
+"""카메라별, 하프별로 실제 흰 선이 모델 선에서 몇 미터 떨어져 있는가?
 
-For each model-line sample, search along the image normal (+-25 px) for the strongest white-line response and
-map that pixel back to the court with the homography of that half. Errors above ~1 m are not reliably detected.
-Usage: python line_error.py [suffix]   (default "_refined" -> out/H_cam<N>_refined.json; "" = clicks only)
+모델 선의 각 샘플마다 이미지 법선 방향(+-25 px)으로 가장 강한 흰 선 응답을 찾고, 그 픽셀을 해당 하프의
+호모그래피로 코트에 다시 매핑한다. 약 1 m를 넘는 오차는 안정적으로 검출되지 않는다.
+사용법: python line_error.py [suffix]   (기본값 "_refined" -> out/H_cam<N>_refined.json; "" = 클릭만 사용한 결과)
 """
 import json
 import sys
@@ -10,13 +10,14 @@ import sys
 import cv2
 import numpy as np
 
-from calibrate import front_facing, in_half
+from calib_core import front_facing, in_half
+from court import spec_of
 from refine import match_lines, ridge_map, sample_model
 
 suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
-model = sample_model()
 for n in (1, 2):
     d = json.load(open(f"out/H_cam{n}{suffix}.json"))
+    model = sample_model(spec_of(d))
     ridge = cv2.GaussianBlur(ridge_map(cv2.imread(f"out/frame_cam{n}.jpg")), (0, 0), 1)
     parts = []
     for region in ("near", "far"):

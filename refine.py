@@ -1,14 +1,14 @@
-"""Snap each camera's two homographies (near half, far half) onto the white court lines.
-The far one starts from the near one (calibrate.py has no far-half clicks) and maps the halfway line exactly like it.
+"""각 카메라의 두 호모그래피(가까운 하프, 먼 하프)를 코트의 흰 선에 맞춘다.
+먼 하프는 가까운 하프에서 시작하며(calibrate.py에는 먼 하프 클릭이 없음), 하프라인은 가까운 하프와 똑같이 매핑한다.
 
-Usage: python refine.py   -> out/H_cam<N>_refined.json + out/H_cam<N>_refined_overlay.jpg
-Method (ICP): sample the court model's lines on one half, find the nearest white line along the image normal,
-re-fit the homography, repeat with a shrinking search radius.
-  near half: RANSAC fit (drops matches on fences/players); the hand clicks are added as heavily weighted anchors so
-             the fit cannot drift away from them.
-  far half:  H_far = H_near o K, where K = I + v [1 0 0] leaves every point of the halfway line (x = 0) in place, so
-             the two homographies agree along the whole halfway line (no jump when a player crosses it). RANSAC only
-             picks the inlier matches; v (3 numbers) is then least-squares fitted to them.
+사용법: python refine.py   -> out/H_cam<N>_refined.json + out/H_cam<N>_refined_overlay.jpg
+방법 (ICP): 한 하프의 코트 모델 선을 샘플링하고, 이미지 법선 방향으로 가장 가까운 흰 선을 찾아
+호모그래피를 다시 피팅한다. 탐색 반경을 줄여가며 반복.
+  가까운 하프: RANSAC 피팅(펜스/선수 위의 매칭은 버림); 손으로 찍은 클릭을 큰 가중치의 앵커로 추가해
+             피팅이 클릭에서 멀어지지 않게 한다.
+  먼 하프:   H_far = H_near o K, 여기서 K = I + v [1 0 0]은 하프라인(x = 0) 위의 모든 점을 그대로 두므로
+             두 호모그래피가 하프라인 전체에서 일치한다(선수가 하프라인을 넘어도 튀지 않음). RANSAC은
+             inlier 매칭을 고르는 데만 쓰고, v (3개 값)는 그 매칭에 최소제곱으로 피팅한다.
 """
 import json
 
@@ -16,21 +16,21 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
-from calibrate import draw_overlay, front_facing, in_half
-from court import GOAL_W, PENALTY_R, court_lines
+from calib_core import draw_overlay, front_facing, in_half
+from court import DEFAULT_SPEC, court_lines, spec_of
 
 SIGMAS = (1.5, 2.5, 4.0, 6.0)
-SAMPLE_SPACING = 0.15  # m between model-line samples
-CIRCLE_MARGIN = 3.2  # each half also uses the whole center circle (radius 3 m)
-# the far-half fit also uses the near-half lines within 8 m of the halfway line (circle, sidelines). With the halfway
-# line shared, using the whole court pulls the far half toward H_near (measured: cam1 far 0.43 m, cam2 0.72 m vs
-# 0.36 m, 0.61 m with 8 m)
+SAMPLE_SPACING = 0.15  # 모델 선 샘플 간격 (m)
+CIRCLE_PAD = 0.2  # 각 하프는 센터 서클 전체도 사용 (반지름 + 여유, m)
+# 먼 하프 피팅은 하프라인에서 8 m 이내의 가까운 하프 선(서클, 사이드라인)도 사용한다. 하프라인을 공유하는
+# 상태에서 코트 전체를 쓰면 먼 하프가 H_near 쪽으로 끌려간다 (측정값: cam1 먼 하프 0.43 m, cam2 0.72 m,
+# 8 m일 때는 0.36 m, 0.61 m)
 FAR_MARGIN = 8.0
-RADII = (25, 18, 12, 8, 5, 3, 3)  # px, ICP search radius per round
+RADII = (25, 18, 12, 8, 5, 3, 3)  # px, 라운드별 ICP 탐색 반경
 
 
 def ridge_map(frame):
-    """Bright thin-line strength in [0, 1] (multi-scale Hessian), zero on saturated colors (grass, trees)."""
+    """밝고 가는 선의 강도 [0, 1] (멀티스케일 헤시안), 채도가 높은 색(잔디, 나무)에서는 0."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     out = np.zeros_like(gray)
@@ -39,16 +39,16 @@ def ridge_map(frame):
         ixx = cv2.Sobel(g, cv2.CV_32F, 2, 0, ksize=3)
         iyy = cv2.Sobel(g, cv2.CV_32F, 0, 2, ksize=3)
         ixy = cv2.Sobel(g, cv2.CV_32F, 1, 1, ksize=3)
-        lam_min = (ixx + iyy) / 2 - np.sqrt(((ixx - iyy) / 2) ** 2 + ixy ** 2)  # most negative curvature = bright ridge
+        lam_min = (ixx + iyy) / 2 - np.sqrt(((ixx - iyy) / 2) ** 2 + ixy ** 2)  # 가장 음수인 곡률 = 밝은 능선
         out = np.maximum(out, s ** 2 * np.maximum(0, -lam_min))
     out *= (hsv[..., 1] < 110)
-    return np.minimum(out / np.percentile(out, 99.7), 1.0).astype(np.float32)
+    return np.minimum(out / max(np.percentile(out, 99.7), 1e-6), 1.0).astype(np.float32)
 
 
-def sample_model(penalty_r=PENALTY_R, goal_w=GOAL_W):
-    """Points every ~15 cm along all court lines."""
+def sample_model(spec=DEFAULT_SPEC):
+    """모든 코트 선을 따라 ~15 cm마다 찍은 점."""
     pts = []
-    for line in court_lines(penalty_r, goal_w):
+    for line in court_lines(spec):
         for a, b in zip(line[:-1], line[1:]):
             n = max(int(np.linalg.norm(b - a) / SAMPLE_SPACING), 1)
             pts.append(np.linspace(a, b, n, endpoint=False))
@@ -61,8 +61,8 @@ def project(Hc2i, pts):
 
 
 def match_lines(ridge, Hc2i, pts, radius, min_ridge=0.3):
-    """For each model sample, the strongest white-line pixel along the image normal within +-radius px.
-    Returns (court points, matched image points)."""
+    """모델 샘플마다 이미지 법선 방향 +-radius px 안에서 가장 강한 흰 선 픽셀을 찾는다.
+    (코트 점, 매칭된 이미지 점)을 반환."""
     h, w = ridge.shape
     px, depth = project(Hc2i, pts)
     offs = np.arange(-radius, radius + 1)
@@ -70,7 +70,7 @@ def match_lines(ridge, Hc2i, pts, radius, min_ridge=0.3):
     for i in range(1, len(pts) - 1):
         t = px[i + 1] - px[i - 1]
         if depth[i] <= 0 or np.linalg.norm(t) < 1e-3 or np.linalg.norm(pts[i + 1] - pts[i - 1]) > 0.5:
-            continue  # behind the camera, degenerate, or a joint between two lines
+            continue  # 카메라 뒤, 퇴화된 경우, 또는 두 선의 이음매
         nrm = np.array([-t[1], t[0]]) / np.linalg.norm(t)
         cand = px[i] + offs[:, None] * nrm
         if (cand < 2).any() or (cand[:, 0] > w - 3).any() or (cand[:, 1] > h - 3).any():
@@ -83,7 +83,7 @@ def match_lines(ridge, Hc2i, pts, radius, min_ridge=0.3):
 
 
 def icp_align(ridge, H_img2court, pts, anchor_world, anchor_img, anchor_w=5, radii=RADII):
-    """Returns (H_img2court, fraction of line matches kept by RANSAC in the last round)."""
+    """(H_img2court, 마지막 라운드에서 RANSAC이 남긴 선 매칭 비율)을 반환."""
     a_src = np.repeat(np.asarray(anchor_world, float), anchor_w, axis=0)
     a_dst = np.repeat(np.asarray(anchor_img, float), anchor_w, axis=0)
     Hc2i = front_facing(np.linalg.inv(H_img2court))
@@ -102,11 +102,11 @@ def icp_align(ridge, H_img2court, pts, anchor_world, anchor_img, anchor_w=5, rad
 
 
 def icp_align_far(ridge, H_near, pts, radii=RADII):
-    """Far half as H_near o K with K = I + v [1 0 0] (fixes the halfway line pointwise).
-    Returns (H_img2court, fraction of line matches kept by RANSAC in the last round)."""
+    """먼 하프를 H_near o K, K = I + v [1 0 0]로 구한다 (하프라인의 모든 점을 고정).
+    (H_img2court, 마지막 라운드에서 RANSAC이 남긴 선 매칭 비율)을 반환."""
     G = front_facing(np.linalg.inv(H_near))
 
-    def c2i(v):  # K's third column is (0, 0, 1), so (G K)[2, 2] = G[2, 2] stays positive (front facing)
+    def c2i(v):  # K의 세 번째 열이 (0, 0, 1)이므로 (G K)[2, 2] = G[2, 2]는 양수로 유지된다 (카메라 앞)
         return G @ (np.eye(3) + np.outer(v, [1.0, 0.0, 0.0]))
 
     v, ratio = np.zeros(3), 0.0
@@ -126,16 +126,17 @@ def icp_align_far(ridge, H_near, pts, radii=RADII):
 
 def refine_camera(d, frame):
     ridge = cv2.GaussianBlur(ridge_map(frame), (0, 0), 1)
-    model = sample_model()
+    spec = spec_of(d)
+    model = sample_model(spec)
     out = dict(d)
-    # near half: its own lines (plus the whole center circle), anchored at the clicks
-    pts = model[in_half(model, d["half"], "near", margin=CIRCLE_MARGIN)]
+    # 가까운 하프: 자기 하프의 선(+ 센터 서클 전체)을 사용, 클릭을 앵커로 고정
+    pts = model[in_half(model, d["half"], "near", margin=spec.center_r + CIRCLE_PAD)]
     idx = [int(i) for i in d["world"]["near"]]
     H_near, ratio = icp_align(ridge, np.array(d["H_near"]), pts,
                               [d["world"]["near"][str(i)] for i in idx], [d["img_pts"][i] for i in idx])
     print(f"  near half: {ratio:.0%} of line matches kept")
-    # far half: its own lines are a few pixels thin and far away, so the sharp lines around the halfway line are added.
-    # It inherits the refined near half's halfway line.
+    # 먼 하프: 자기 하프의 선은 몇 픽셀 두께로 가늘고 멀어서, 하프라인 주변의 선명한 선을 추가로 쓴다.
+    # 하프라인은 보정된 가까운 하프의 것을 그대로 물려받는다.
     pts = model[in_half(model, d["half"], "far", margin=FAR_MARGIN)]
     H_far, ratio = icp_align_far(ridge, H_near, pts)
     print(f"  far half: {ratio:.0%} of line matches kept")
@@ -154,4 +155,4 @@ if __name__ == "__main__":
         r = refine_camera(d, frame)
         json.dump(r, open(f"out/H_cam{n}_refined.json", "w"), indent=2)
         cv2.imwrite(f"out/H_cam{n}_refined_overlay.jpg",
-                    draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), r["half"]))
+                    draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), r["half"], spec_of(r)))

@@ -1,0 +1,41 @@
+{
+ "offset_a_minus_b_s": 124.25,
+ "basis": "experiments/full_match_team/summary.json clock (player positions, 53 min): cam1 - cam2 = 124.224 at the start, 124.271 at the end; aligned to the middle. Audio estimate was 124.293, the value in use 124.27.",
+ "residual_drift_note": "about 0.024 s either way at the ends of the match, cannot be removed by a start cut",
+ "cut": "stream copy, no re-encoding",
+ "output_a_minus_b_s": 0.0071,
+ "videos": {
+  "20261008_170919_sync.mp4": {
+   "source": "20261008_170919.mp4",
+   "source_time_of_output_0_s": 145.3047,
+   "frames_checked_start": "400/400",
+   "first_output_pts_s": 0.0,
+   "frames_checked_40min": "100/100",
+   "shift_at_40min_s": 145.3047,
+   "video_frames": 190246,
+   "source_frames": 198967,
+   "duration_s": 3169.46,
+   "video_start_s": 0.0,
+   "audio_start_s": 0.0,
+   "bytes": 8110601862
+  },
+  "20261008_171122_sync.mp4": {
+   "source": "20261008_171122.mp4",
+   "source_time_of_output_0_s": 21.0476,
+   "frames_checked_start": "200/200",
+   "first_output_pts_s": 0.0,
+   "frames_checked_40min": "50/50",
+   "shift_at_40min_s": 21.0476,
+   "video_frames": 95592,
+   "source_frames": 96222,
+   "duration_s": 3186.290933,
+   "video_start_s": 0.0,
+   "audio_start_s": 0.0,
+   "bytes": 6870652761
+  }
+ },
+ "cameras": {
+  "1": "20261008_170919_sync.mp4",
+  "2": "20261008_171122_sync.mp4"
+ }
+}
