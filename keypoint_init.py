@@ -10,9 +10,11 @@ import sys
 import cv2
 import numpy as np
 
-from calib_core import in_half, to_world
+from auto_init import ROT180, consensus, median_of
+from calib_core import front_facing, in_half, to_world
 from court import DEFAULT_SPEC
 from refine import CIRCLE_PAD, FAR_MARGIN, icp_align, icp_align_far, ridge_map, sample_model
+from track import line_score
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "train"))
 from make_dataset import keypoints  # noqa: E402
@@ -26,6 +28,9 @@ INIT_FAR_X = 10.0  # 초기 행렬에 쓰는 먼 쪽 지점의 하프라인으�
 # 측정 (15개 시점): 앵커 5 / 반경 8 px부터면 cam1 가까운 사이드라인이 화면 아래에서 227 px 벗어남 -> 이 설정에서 17 px
 KP_RADII = (60, 40, 25, 18, 12, 8, 5, 3, 3)
 ANCHOR_W = 100  # ICP에서 키포인트 하나의 비중 (흰 선 매칭 몇 개만큼)
+# 자동 후보로 내놓는 가까운 쪽 흰 선 일치율 하한 (calib_service의 수동 클릭 검사와 같은 값).
+# 측정 (15개 시점): 자동 결과 최소 0.55~0.65, 중앙값 0.71~0.84 / 15~30 px 틀어진 결과 최대 0.52
+ACCEPT_SCORE = 0.6
 
 _model = None
 
@@ -77,4 +82,31 @@ def keypoint_calibrate(frame, half, spec=DEFAULT_SPEC, model=None):
     fi = np.array([p for _, p in far], float).reshape(-1, 2)
     far_pts = model_pts[in_half(model_pts, half, "far", margin=FAR_MARGIN)]
     H_far, _ = icp_align_far(ridge, H_near, far_pts, radii=KP_RADII, anchor_world=fw, anchor_img=fi)
-    return {"status": "ok", "H_near": H_near.tolist(), "H_far": H_far.tolist(), "n_near": len(near), "n_far": len(far)}
+    G_east = front_facing(np.linalg.inv((np.eye(3) if half == "east" else ROT180) @ H_near))
+    return {"status": "ok", "H_near": H_near.tolist(), "H_far": H_far.tolist(), "n_near": len(near), "n_far": len(far),
+            "confidence": round(line_score(ridge, front_facing(np.linalg.inv(H_near)), near_pts), 3),
+            "_G": G_east, "_size": (frame.shape[1], frame.shape[0])}
+
+
+def keypoint_calibrate_video(source, half, spec=DEFAULT_SPEC, times=None, n_windows=5, model=None, log=lambda *_: None):
+    """여러 시점에서 코트를 찾아 다수결로 앵커를 정한다. auto_init.auto_calibrate_video와 같은 형식을 돌려준다.
+    status ok: 과반이 같은 답을 내고 대표 시점의 흰 선 일치율이 ACCEPT_SCORE 이상. 자동 후보도 사용자 승인은 받는다."""
+    if times is None:
+        times = np.linspace(source.duration * 0.15, source.duration * 0.9, n_windows)
+    results = []
+    for t in times:
+        frame = median_of(source, float(t))
+        r = keypoint_calibrate(frame, half, spec, model) if frame is not None else {"status": "failed", "H_near": None}
+        r.setdefault("confidence", 0.0)
+        r["t_sec"] = float(t)
+        log(f"  t={float(t):8.1f}: {r['status']} 일치율={r['confidence']:.2f} 지점 {r.get('n_near', 0)}+{r.get('n_far', 0)}")
+        results.append(r)
+    lead, members = consensus(results, spec)
+    public = [{k: v for k, v in r.items() if not k.startswith("_") and not k.startswith("H_")} for r in results]
+    if lead is None:
+        return {"status": "failed", "method": "keypoint", "votes": 0, "windows": len(results), "H_near": None, "H_far": None,
+                "confidence": 0.0, "details": public}
+    best = results[lead]
+    ok = len(members) * 2 > len(results) and best["confidence"] >= ACCEPT_SCORE
+    return {**{k: v for k, v in best.items() if not k.startswith("_")}, "status": "ok" if ok else "low_confidence",
+            "method": "keypoint", "votes": len(members), "windows": len(results), "details": public}

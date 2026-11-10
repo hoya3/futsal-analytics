@@ -133,6 +133,8 @@ r = keypoint_calibrate(frame, "east")   # {"status", "H_near", "H_far", ...}
 
 코트 키포인트 모델(`train/best.pt`, YOLO pose)이 찾은 지점으로 호모그래피를 풀고 흰 선 ICP로 다듬습니다. 하프라인 위 4점은 한 직선 위라 제약이 부족하므로 첫 행렬에는 먼 10 m 지점까지 더합니다(먼 골라인 지점은 꺾인 바닥 때문에 가까운 쪽을 비틀어 쓰지 않음). 지점이 화면 위쪽에 몰려 있어 ICP는 앵커를 강하게 걸고 넓은 반경으로 화면 아래 선을 잡습니다. 기존 캘리브레이션과의 차이는 가까운 쪽 cam1 0.09 m, cam2 0.08 m(15개 시점 중앙값)이고, 검증 점 기준 먼 쪽은 클릭 보정보다 나빠(cam1 0.63 m vs 0.41 m) 사람이 확인할 자동 후보 용도입니다. 평가: `python eval/eval_keypoint_init.py`.
 
+`keypoint_calibrate_video`는 5개 시점에서 이를 돌려 과반이 같은 답을 내고 가까운 쪽 흰 선 일치율이 0.6 이상이면 `ok`(자동 후보), 아니면 `low_confidence`(수동 클릭 안내)를 돌려줍니다. `calib_service.propose`가 이것을 쓰며, 자동 후보도 화면 확인 뒤 `accept`로 승인해야 진행됩니다.
+
 모델 학습 데이터는 `python train/make_dataset.py`로 시간별 캘리브레이션(밀림 반영)에서 만들고, `train/train_court_pose.ipynb`(Colab) 또는 `_kaggle.ipynb`로 학습합니다. 좌우 반전 증강은 끕니다(`fliplr=0.0`): 두 카메라 모두 대각선 사이드라인이 화면 오른쪽이라 반전 영상은 실제로 나오지 않고, 켜면 먼 쪽 오른쪽 지점을 잘못 배웁니다.
 
 ### 정확도 확인
@@ -167,7 +169,7 @@ python measure_circle.py              # 센터서클 반지름/중심 실측
 | `topdown.py` | 위에서 본 코트 이미지 생성 |
 | `view_calib.py` | 시각별 호모그래피를 카메라 화면에서 확인 |
 | `plot_players.py` | 선수 검출 결과를 코트 위에 표시 |
-| `calib_service.py` | 자동 후보 → 승인/수동 보정 → 추적 흐름 (서버용) |
+| `calib_service.py` | 자동 후보 → 승인/수동 보정 → 추적 흐름 (서버용). 자동 후보는 `train/best.pt`가 있으면 키포인트 모델, 없으면 `auto_init` |
 | `auto_init.py` | 카메라 자세 격자 탐색으로 클릭 없이 코트 찾기 (실험) |
 | `keypoint_init.py` | 키포인트 모델로 클릭 없이 코트 찾기 |
 | `eval/` | 검증 점 라벨링·채점, 자동 초기화 평가 |
@@ -182,5 +184,4 @@ python measure_circle.py              # 센터서클 반지름/중심 실측
 
 - 두 카메라가 같은 선수를 동시에 볼 때 중복 제거와 위치 융합
 - 줄자로 잰 기준점으로 실제 정확도 검증 (골대가 규격 위치에 있는지도 확인: 골포스트는 검증 점과 약 0.5 m 어긋남)
-- `keypoint_init`을 `calib_service`의 자동 후보로 연결
 - cam2 먼 쪽 골대 주변 지점: 캘리브레이션이 1.7 m까지 어긋나 키포인트 학습에서 빠져 있음

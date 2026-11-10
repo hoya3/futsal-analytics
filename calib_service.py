@@ -34,6 +34,7 @@ DEFAULT_ROOT = os.path.join("out", "sessions")
 DEFAULT_HALF = {1: "east", 2: "west"}
 MANUAL_MIN_SCORE = 0.6  # 실제 영상의 올바른 캘리브레이션은 0.8 이상
 FAR_ANCHOR_MAX_PX = 15.0  # 먼 쪽 코너 클릭과 결과의 허용 차이: 좌우를 바꿔 찍으면 훨씬 크다
+KEYPOINT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train", "best.pt")
 
 
 class SessionError(ValueError):
@@ -95,6 +96,7 @@ def _view(s):
             "t": cand.get("t_sec", s.get("frame_t")), "frame": s.get("frame"), "overlay": s.get("overlay") if cand else None,
             "confidence": cand.get("confidence"), "source": cand.get("source"), "warnings": s.get("warnings", []),
             "H_near": cand.get("H_near"), "H_far": cand.get("H_far"), "votes": s.get("votes"), "windows": s.get("windows"),
+            "method": s.get("method"),
             "landmarks": [lm["name"] for lm in click_landmarks(spec_of(s))]}
 
 
@@ -110,8 +112,17 @@ def _write_overlay(s, frame, cand, root):
     s["overlay"] = path
 
 
+def find_court(source, half, spec, times=None, cfg=AutoConfig(), log=lambda *_: None):
+    """자동 인식: 코트 키포인트 모델이 있으면 그것으로(시점당 약 1초), 없으면 카메라 자세 격자 탐색(시점당 약 30초).
+    모델(train/best.pt)은 저장소에 없으므로 학습한 가중치를 넣은 서버에서만 키포인트 방식이 쓰인다."""
+    if os.path.exists(KEYPOINT_MODEL):
+        from keypoint_init import keypoint_calibrate_video  # ultralytics는 이때만 불러온다
+        return keypoint_calibrate_video(source, half, spec, times, log=log)
+    return auto_calibrate_video(source, half, spec, times, cfg, log=log)
+
+
 def propose(video, cam, spec=DEFAULT_SPEC, half=None, root=DEFAULT_ROOT, times=None, cfg=AutoConfig(), log=lambda *_: None):
-    """새 세션을 만들고 자동 인식을 시도한다. 시점당 약 30초, 기본 5개 시점."""
+    """새 세션을 만들고 자동 인식을 시도한다(find_court, 기본 5개 시점). 자동 후보도 accept로 사용자 승인을 받는다."""
     source = _open_scaled(video)
     session_id = f"cam{cam}-{uuid.uuid4().hex[:8]}"
     os.makedirs(_dir(session_id, root))
@@ -119,8 +130,9 @@ def propose(video, cam, spec=DEFAULT_SPEC, half=None, root=DEFAULT_ROOT, times=N
     s = {"id": session_id, "video": video, "cam": cam, "half": half, "spec": asdict(spec), "scale": source.scale,
          "state": "needs_manual", "candidate": None}
 
-    result = auto_calibrate_video(source, half, spec, times, cfg, log=log)
-    s.update(status=result["status"], votes=result.get("votes"), windows=result.get("windows"), details=result.get("details"))
+    result = find_court(source, half, spec, times, cfg, log=log)
+    s.update(status=result["status"], method=result.get("method", "pose_grid"), votes=result.get("votes"),
+             windows=result.get("windows"), details=result.get("details"))
     t = float(result.get("t_sec", source.duration * 0.5))
     frame = median_of(source, t)
     if frame is None:

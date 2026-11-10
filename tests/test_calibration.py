@@ -226,7 +226,7 @@ def service(monkeypatch, tmp_path):
 def auto_stub(monkeypatch, status="ok", H=H_NEAR):
     result = {"status": status, "t_sec": 20.0, "votes": 3, "windows": 5, "confidence": 0.6, "details": [],
               "H_near": H.tolist() if status == "ok" else None, "H_far": H.tolist() if status == "ok" else None}
-    monkeypatch.setattr(svc, "auto_calibrate_video", lambda *a, **k: result)
+    monkeypatch.setattr(svc, "find_court", lambda *a, **k: result)
 
 
 def test_service_auto_candidate_needs_approval_then_tracks(service, monkeypatch):
@@ -718,3 +718,31 @@ def test_keypoint_init_refuses_points_that_do_not_fix_a_homography(monkeypatch):
     monkeypatch.setattr(ki, "detect", fake_detect({"halfway_left", "halfway_right", "circle_halfway_left",
                                                    "circle_halfway_right", "near_10m"}))
     assert ki.keypoint_calibrate(render(G), "east")["status"] == "failed"
+
+
+def test_keypoint_video_needs_majority_and_line_match(monkeypatch):
+    import keypoint_init as ki
+
+    monkeypatch.setattr(ki, "detect", fake_detect({"halfway_left", "halfway_right", "circle_halfway_left",
+                                                   "circle_halfway_right", "near_10m", "far_10m"}))
+    monkeypatch.setattr(ki, "median_of", lambda source, t: source.frame_at(t))
+    r = ki.keypoint_calibrate_video(FakeSource(60, lambda t: (0, 0)), "east", times=[10.0, 20.0, 30.0])
+    assert r["status"] == "ok" and r["votes"] == 3 and r["method"] == "keypoint" and r["confidence"] >= ki.ACCEPT_SCORE
+    # 지점은 맞지만 화면에 흰 선이 없으면 일치율이 낮아 자동 후보로 내놓지 않는다
+    blank = ki.keypoint_calibrate_video(FakeSource(60, lambda t: None), "east", times=[10.0, 20.0, 30.0])
+    assert blank["status"] == "low_confidence" and blank["confidence"] < ki.ACCEPT_SCORE
+
+
+def test_service_uses_keypoint_model_only_when_weights_exist(monkeypatch, tmp_path):
+    import keypoint_init as ki
+
+    called = []
+    monkeypatch.setattr(svc, "auto_calibrate_video", lambda *a, **k: called.append("pose_grid") or {"status": "failed"})
+    monkeypatch.setattr(ki, "keypoint_calibrate_video", lambda *a, **k: called.append("keypoint") or {"status": "failed"})
+    monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(tmp_path / "missing.pt"))
+    svc.find_court(None, "east", CourtSpec())
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"")
+    monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(weights))
+    svc.find_court(None, "east", CourtSpec())
+    assert called == ["pose_grid", "keypoint"]
