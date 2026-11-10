@@ -686,3 +686,35 @@ def test_dataset_labels_follow_drift_within_segment():
     vis = (still[:, 2] > 0) & (moved[:, 2] > 0)
     assert vis.sum() >= 4
     assert np.allclose(moved[vis, :2] - still[vis, :2], [2.0, -1.0], atol=1e-6)
+
+
+# ---- 키포인트 모델 기반 자동 초기화 (모델 대신 정답 지점을 넣어 기하만 검증)
+
+
+def fake_detect(names):
+    import make_dataset as md
+
+    def detect(frame, model=None):
+        return {k: project(G, np.array([xy]))[0][0] for k, xy in md.keypoints() if k in names}
+    return detect
+
+
+def test_keypoint_init_recovers_homography_from_halfway_and_far_points(monkeypatch):
+    import keypoint_init as ki
+
+    monkeypatch.setattr(ki, "detect", fake_detect({"halfway_left", "halfway_right", "circle_halfway_left",
+                                                   "circle_halfway_right", "near_10m", "far_10m"}))
+    r = ki.keypoint_calibrate(render(G), "east")
+    assert r["status"] == "ok"
+    world = np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0]])
+    px, _ = project(G, world)
+    assert np.linalg.norm(pixel_to_court({"half": "east", **r}, px) - world, axis=1).max() < 0.2
+
+
+def test_keypoint_init_refuses_points_that_do_not_fix_a_homography(monkeypatch):
+    import keypoint_init as ki
+
+    # 하프라인 4점 + 가까운 10 m 지점: 제약 7개라 호모그래피가 정해지지 않는다
+    monkeypatch.setattr(ki, "detect", fake_detect({"halfway_left", "halfway_right", "circle_halfway_left",
+                                                   "circle_halfway_right", "near_10m"}))
+    assert ki.keypoint_calibrate(render(G), "east")["status"] == "failed"
