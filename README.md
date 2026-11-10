@@ -131,7 +131,7 @@ from keypoint_init import keypoint_calibrate
 r = keypoint_calibrate(frame, "east")   # {"status", "H_near", "H_far", ...}
 ```
 
-코트 키포인트 모델(`train/best.pt`, YOLO pose)이 찾은 지점으로 호모그래피를 풀고 흰 선 ICP로 다듬습니다. 하프라인 위 4점은 한 직선 위라 제약이 부족하므로 첫 행렬은 먼 쪽 지점까지 모두 써서 풉니다. 기존 캘리브레이션과의 차이는 cam2 가까운 쪽 0.10 m, cam1 0.26 m(15개 시점 중앙값)로, 사람이 확인할 자동 후보 용도입니다. 평가: `python eval/eval_keypoint_init.py`.
+코트 키포인트 모델(`train/best.pt`, YOLO pose)이 찾은 지점으로 호모그래피를 풀고 흰 선 ICP로 다듬습니다. 하프라인 위 4점은 한 직선 위라 제약이 부족하므로 첫 행렬에는 먼 10 m 지점까지 더합니다(먼 골라인 지점은 꺾인 바닥 때문에 가까운 쪽을 비틀어 쓰지 않음). 지점이 화면 위쪽에 몰려 있어 ICP는 앵커를 강하게 걸고 넓은 반경으로 화면 아래 선을 잡습니다. 기존 캘리브레이션과의 차이는 가까운 쪽 cam1 0.09 m, cam2 0.08 m(15개 시점 중앙값)이고, 검증 점 기준 먼 쪽은 클릭 보정보다 나빠(cam1 0.63 m vs 0.41 m) 사람이 확인할 자동 후보 용도입니다. 평가: `python eval/eval_keypoint_init.py`.
 
 모델 학습 데이터는 `python train/make_dataset.py`로 시간별 캘리브레이션(밀림 반영)에서 만들고, `train/train_court_pose.ipynb`(Colab) 또는 `_kaggle.ipynb`로 학습합니다. 좌우 반전 증강은 끕니다(`fliplr=0.0`): 두 카메라 모두 대각선 사이드라인이 화면 오른쪽이라 반전 영상은 실제로 나오지 않고, 켜면 먼 쪽 오른쪽 지점을 잘못 배웁니다.
 

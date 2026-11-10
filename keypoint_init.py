@@ -20,8 +20,12 @@ from make_dataset import keypoints  # noqa: E402
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train", "best.pt")
 CONF_MIN = 0.5  # 이보다 낮은 키포인트는 화면에 없다고 본다
 MIN_POINTS = 6  # 필요한 지점 수: 하프라인 4점은 한 직선 위라 제약이 5개뿐이므로 그 밖의 점이 2개 이상 있어야 풀린다
-KP_RADII = (8, 5, 3, 3)  # 키포인트 초기값이 이미 수 px 안이므로 좁게 시작
-ANCHOR_W = 5  # ICP에서 키포인트 하나의 비중 (흰 선 매칭 몇 개만큼)
+INIT_FAR_X = 10.0  # 초기 행렬에 쓰는 먼 쪽 지점의 하프라인으로부터 거리 상한 (m): 먼 10 m 지점까지
+# 키포인트는 화면 위쪽(하프라인, 10 m 지점)에 몰려 있어 화면 아래쪽 기울기가 거의 정해지지 않는다. 앵커를 강하게 걸어
+# 위쪽을 고정하고, 넓은 반경으로 아래쪽 선(가까운 사이드라인, 페널티 호)을 잡는다.
+# 측정 (15개 시점): 앵커 5 / 반경 8 px부터면 cam1 가까운 사이드라인이 화면 아래에서 227 px 벗어남 -> 이 설정에서 17 px
+KP_RADII = (60, 40, 25, 18, 12, 8, 5, 3, 3)
+ANCHOR_W = 100  # ICP에서 키포인트 하나의 비중 (흰 선 매칭 몇 개만큼)
 
 _model = None
 
@@ -53,8 +57,13 @@ def keypoint_calibrate(frame, half, spec=DEFAULT_SPEC, model=None):
     if len(near) + len(far) < MIN_POINTS or len({names[k][0] for k in found}) < 2:
         return {"status": "failed", "H_near": None, "H_far": None, "n_near": len(near), "n_far": len(far)}
     nw, ni = np.array([w for w, _ in near], float).reshape(-1, 2), np.array([p for _, p in near], float).reshape(-1, 2)
-    # 초기값은 모든 지점으로 푼 평면 하나: 가까운 쪽 지점만으로는 하프라인 4점이 한 직선 위라 제약이 7개뿐이다
-    aw, ai = np.r_[nw, np.array([w for w, _ in far], float).reshape(-1, 2)], np.r_[ni, np.array([p for _, p in far], float).reshape(-1, 2)]
+    # 초기값은 평면 하나: 가까운 쪽 지점만으로는 하프라인 4점이 한 직선 위라 제약이 7개뿐이라 먼 쪽 지점을 더한다.
+    # 바닥이 하프라인에서 꺾여 있으므로 하프라인에서 INIT_FAR_X 안의 먼 쪽 지점만 쓴다 (먼 골라인 지점은 가까운 쪽을 비튼다)
+    init = [(w, p) for w, p in far if abs(w[0]) <= INIT_FAR_X]
+    aw = np.r_[nw, np.array([w for w, _ in init], float).reshape(-1, 2)]
+    ai = np.r_[ni, np.array([p for _, p in init], float).reshape(-1, 2)]
+    if len(aw) < MIN_POINTS:
+        return {"status": "failed", "H_near": None, "H_far": None, "n_near": len(near), "n_far": len(far)}
     H0, _ = cv2.findHomography(ai, aw, 0)
     if H0 is None:
         return {"status": "failed", "H_near": None, "H_far": None, "n_near": len(near), "n_far": len(far)}
