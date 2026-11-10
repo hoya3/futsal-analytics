@@ -3,8 +3,10 @@
 삼각대의 폰은 경기 중 조금씩 밀린다(측정: cam1은 약 10 px, 코트 위 0.65~1.5 m). 그래서 일정 간격으로 프레임을 뽑아
 앵커 대비 영상 평행이동을 흰 선으로 추정하고, 이동이 같은 샘플을 구간으로 묶은 뒤 구간마다 호모그래피를 다시 맞춘다.
 선이 맞지 않는 구간(촬영 시작 직후의 조정, 폰을 크게 건드린 경우)은 unresolved로 남겨 수동 재지정 대상으로 넘긴다.
+구간을 나누지 않는 tol_px 안의 느린 밀림은 구간마다 서브픽셀로 따로 재서 drift로 저장한다(court_map이 시각에 맞춰 반영).
 
 사용법: python track.py 1 2 [--step 5]
+        python track.py 1 2 --drift-only   (기존 out/calib_cam<N>.json의 구간은 두고 밀림만 다시 잰다)
   입력: out/H_cam<N>_refined.json (없으면 out/H_cam<N>.json), 그 안의 video 경로
   출력: out/calib_cam<N>.json, 구간별 확인용 out/track_cam<N>_seg<K>.jpg
 """
@@ -18,10 +20,11 @@ import numpy as np
 from calib_core import Source, draw_overlay, front_facing, in_half
 from court import spec_of
 from court_map import load_anchor
-from refine import CIRCLE_PAD, FAR_MARGIN, icp_align, icp_align_far, project, ridge_map, sample_model
+from refine import CIRCLE_PAD, FAR_MARGIN, far_anchors, icp_align, icp_align_far, project, ridge_map, sample_model
 
 HIT_THRESHOLD = 0.25
 TRACK_RADII = (8, 5, 3, 3)
+FAR_RADII = (12, 8, 5, 3, 2, 2)
 
 
 @dataclass(frozen=True)
@@ -32,9 +35,14 @@ class TrackConfig:
     tol_px: float = 3.0  # 같은 구간으로 보는 이동 차이 (px)
     rel_score: float = 0.7  # 유효 샘플의 일치율 하한 (앵커 일치율 대비)
     min_score: float = 0.4  # 유효 샘플의 일치율 절대 하한
-    median_frames: int = 5  # 구간 재추정에 쓰는 프레임 수
+    median_frames: int = 41  # 구간 재추정에 쓰는 프레임 수: 고정된 카메라는 많이 합칠수록 먼 쪽 선이 또렷해진다
     boundary_eps: float = 0.5  # 구간 경계 시각의 허용 오차 (s)
     merge_gap: int = 2  # 양옆 이동이 같으면 메우는 무효 샘플 수
+    # tol_px 안의 느린 밀림은 구간을 나누지 않는다. 먼 쪽은 1 px가 약 0.3 m라 구간 안에서 따로 잰다
+    # (측정: 두 카메라 모두 경기 중 약 3 px 밀림, 반영 시 cam1 먼 쪽 검증 오차 중앙값 0.61 -> 0.44 m)
+    drift_step: float = 30.0  # 구간 안 밀림 측정 간격 (s)
+    drift_frames: int = 5  # 측정 시각마다 합치는 프레임 수 (선수를 지운다)
+    drift_span: float = 2.0  # 그 프레임들을 뽑는 범위 (+- s)
 
 
 @dataclass
@@ -92,6 +100,66 @@ def estimate_shift(ridge, G, pts, center, radius):
     dx, dy, _ = search_shift(field, px, center, radius, 4)
     dx, dy, _ = search_shift(field, px, (dx, dy), 4, 1)
     return dx, dy, line_score(ridge, translation(dx, dy) @ G, pts)
+
+
+def subpixel_shift(field, px, radius=4.0):
+    """field 값의 평균이 최대인 평행이동 (dx, dy)를 1 -> 0.25 -> 0.05 px 격자로 좁혀 가며 찾는다. (dx, dy, 평균값)."""
+    best, val = np.zeros(2), 0.0
+    for rad, st in ((radius, 1.0), (1.0, 0.25), (0.25, 0.05)):
+        axis = np.arange(-rad, rad + 1e-9, st)
+        off = np.stack(np.meshgrid(axis, axis), -1).reshape(-1, 2) + best
+        q = (px[None] + off[:, None]).astype(np.float32)
+        mean = cv2.remap(field, q[..., 0], q[..., 1], cv2.INTER_LINEAR, borderValue=0).mean(1)
+        k = int(mean.argmax())
+        best, val = off[k], float(mean[k])
+    return float(best[0]), float(best[1]), val
+
+
+def segment_lines_px(seg, half, model, shape, margin=8):
+    """구간 행렬로 투영한 코트 선 픽셀. 가까운 하프는 H_near, 먼 하프는 H_far로 (하프라인에서 이어진다)."""
+    h, w = shape
+    out = []
+    for region in ("near", "far"):
+        px, depth = project(front_facing(np.linalg.inv(np.array(seg[f"H_{region}"]))), model[in_half(model, half, region)])
+        keep = (depth > 0) & (px[:, 0] > margin) & (px[:, 1] > margin) & (px[:, 0] < w - margin) & (px[:, 1] < h - margin)
+        out.append(px[keep])
+    return np.concatenate(out)
+
+
+def measure_drift(source, result, cfg=TrackConfig(), log=lambda *_: None):
+    """확정된 구간마다 구간 행렬 대비 서브픽셀 평행이동을 drift_step 간격으로 재서 seg["drift"] = [[t, dx, dy], ...]에 넣는다.
+    가까운 쪽과 먼 쪽에 같은 이동을 주므로 하프라인 연결은 유지된다. 선이 잘 안 보인 시각은 버리고, 3점 이동 중앙값으로 튐을 누른다."""
+    model = sample_model(spec_of(result))
+    for seg in result["segments"]:
+        seg.pop("drift", None)
+        if seg["source"] == "unresolved":
+            continue
+        times = np.arange(seg["t0"] + cfg.drift_step / 2, seg["t1"], cfg.drift_step)
+        if len(times) == 0:
+            times = np.array([(seg["t0"] + seg["t1"]) / 2])
+        rows = []
+        for t in times:
+            frames = [f for f in (source.frame_at(float(x)) for x in np.clip(np.linspace(t - cfg.drift_span, t + cfg.drift_span, cfg.drift_frames), seg["t0"], seg["t1"])) if f is not None]
+            if not frames:
+                continue
+            ridge = to_ridge(np.median(np.stack(frames), axis=0).astype(np.uint8))
+            px = segment_lines_px(seg, result["half"], model, ridge.shape)
+            if len(px) < 100:
+                continue
+            dx, dy, _ = subpixel_shift(cv2.GaussianBlur(ridge, (0, 0), 1.5), px)
+            hit = float((ridge[np.rint(px[:, 1] + dy).astype(int).clip(0, ridge.shape[0] - 1),
+                               np.rint(px[:, 0] + dx).astype(int).clip(0, ridge.shape[1] - 1)] > HIT_THRESHOLD).mean())
+            if hit >= cfg.min_score:
+                rows.append([float(t), dx, dy])
+        if rows:
+            d = np.array(rows)
+            if len(d) >= 3:
+                for c in (1, 2):
+                    d[1:-1, c] = np.median(np.stack([d[:-2, c], d[1:-1, c], d[2:, c]]), axis=0)
+            seg["drift"] = d.round(3).tolist()
+            log(f"  [{seg['t0']:8.1f} ~ {seg['t1']:8.1f}] 밀림 {len(d)}점: dx {d[:, 1].min():+.1f}..{d[:, 1].max():+.1f}, "
+                f"dy {d[:, 2].min():+.1f}..{d[:, 2].max():+.1f} px")
+    return result
 
 
 def sample_at(source, t, G, pts, center, cfg, floor):
@@ -194,7 +262,7 @@ def median_frame(source, times, n):
     return np.median(np.stack(frames), axis=0).astype(np.uint8)
 
 
-def refit(frame, Gs_near, Gs_far, near_pts, far_pts):
+def refit(frame, Gs_near, Gs_far, near_pts, far_pts, far_world=None, far_img=None):
     """평행이동한 호모그래피를 시작점으로 흰 선에 다시 맞춘다. 나빠지면 평행이동 결과를 유지한다.
     이미지 -> 코트 (H_near, H_far, 일치율)을 반환."""
     ridge = to_ridge(frame)
@@ -211,7 +279,7 @@ def refit(frame, Gs_near, Gs_far, near_pts, far_pts):
     if score1 < score0:
         return H_near / H_near[2, 2], H_far / H_far[2, 2], score0
 
-    far_new, _ = icp_align_far(ridge, H_new, far_pts, radii=TRACK_RADII)
+    far_new, _ = icp_align_far(ridge, H_new, far_pts, radii=FAR_RADII, anchor_world=far_world, anchor_img=far_img)
     keep_far = line_score(ridge, front_facing(np.linalg.inv(far_new)), far_pts) >= line_score(ridge, Gs_far, far_pts) - 0.05
     return H_new, far_new if keep_far else H_far / H_far[2, 2], score1
 
@@ -225,6 +293,9 @@ def track_camera(source, cal, cfg=TrackConfig(), log=lambda *_: None):
     far_pts = model[in_half(model, half, "far", margin=FAR_MARGIN)]
     G_near = front_facing(np.linalg.inv(np.array(cal["H_near"])))
     G_far = front_facing(np.linalg.inv(np.array(cal["H_far"])))
+    far_world, far_click = far_anchors(cal) if "world" in cal and cal.get("img_pts") else (None, None)  # 카메라가 밀린 구간에서도 먼 쪽 기준을 유지
+    if far_world is not None and len(far_world) == 0:
+        far_world, far_click = None, None
 
     frame = source.frame_at(t_a)
     if frame is None:
@@ -268,23 +339,37 @@ def track_camera(source, cal, cfg=TrackConfig(), log=lambda *_: None):
         dx, dy = _ref(run)
         times = [s.t for s in run["samples"]]
         if seg["t0"] <= t_a <= seg["t1"] and _dist((dx, dy), (0, 0)) <= cfg.tol_px:  # 사용자가 승인한 앵커는 그대로 쓴다
+            H_far = None
+            if far_world is not None:
+                H_far = refit_far(source, times, np.array(cal["H_near"]), G_far, far_pts, far_world, far_click, cfg)
             segments.append({**seg, "source": cal.get("source", "manual"), "H_near": cal["H_near"],
-                             "H_far": cal["H_far"], "score": score_a, "shift": [0.0, 0.0]})
+                             "H_far": cal["H_far"] if H_far is None else H_far.tolist(), "score": score_a, "shift": [0.0, 0.0]})
             continue
         T = translation(dx, dy)
-        H_near, H_far, score = fit_segment(source, times, T @ G_near, T @ G_far, near_pts, far_pts, cfg)
+        far_img = None if far_world is None else far_click + [dx, dy]
+        H_near, H_far, score = fit_segment(source, times, T @ G_near, T @ G_far, near_pts, far_pts, cfg, far_world, far_img)
         segments.append({**seg, "source": "tracked", "H_near": H_near.tolist(), "H_far": H_far.tolist(),
                          "score": score, "shift": [dx, dy]})
 
-    return {**cal, "version": 2, "spec": asdict(spec), "segments": segments}
+    return measure_drift(source, {**cal, "version": 2, "spec": asdict(spec), "segments": segments}, cfg, log)
 
 
-def fit_segment(source, times, Gs_near, Gs_far, near_pts, far_pts, cfg):
+def refit_far(source, times, H_near, G_far, far_pts, far_world, far_img, cfg):
+    """사용자가 승인한 앵커 구간은 H_near를 그대로 두고, 여러 프레임을 합친 영상으로 먼 쪽만 정밀하게 다시 맞춘다."""
+    frame = median_frame(source, times, cfg.median_frames)
+    if frame is None:
+        return None
+    ridge = to_ridge(frame)
+    new, _ = icp_align_far(ridge, H_near, far_pts, radii=FAR_RADII, anchor_world=far_world, anchor_img=far_img)
+    return new if line_score(ridge, front_facing(np.linalg.inv(new)), far_pts) >= line_score(ridge, G_far, far_pts) - 0.05 else None
+
+
+def fit_segment(source, times, Gs_near, Gs_far, near_pts, far_pts, cfg, far_world=None, far_img=None):
     frame = median_frame(source, times, cfg.median_frames)
     if frame is None:
         H_near, H_far = np.linalg.inv(Gs_near), np.linalg.inv(Gs_far)
         return H_near / H_near[2, 2], H_far / H_far[2, 2], 0.0
-    return refit(frame, Gs_near, Gs_far, near_pts, far_pts)
+    return refit(frame, Gs_near, Gs_far, near_pts, far_pts, far_world, far_img)
 
 
 def save_previews(source, result, n):
@@ -300,9 +385,20 @@ def save_previews(source, result, n):
 
 
 def main(args):
+    drift_only = "--drift-only" in args
+    args = [a for a in args if a != "--drift-only"]
     step = float(args[args.index("--step") + 1]) if "--step" in args else TrackConfig.step
     cams = [int(a) for a in args[: args.index("--step")]] if "--step" in args else [int(a) for a in args]
     for n in cams or (1, 2):
+        if drift_only:
+            with open(f"out/calib_cam{n}.json") as f:
+                result = json.load(f)
+            print(f"cam{n}: 밀림만 다시 잰다 ({result['video']})", flush=True)
+            measure_drift(Source(result["video"]), result, TrackConfig(), log=lambda m: print(m, flush=True))
+            with open(f"out/calib_cam{n}.json", "w") as f:
+                json.dump(result, f, indent=2)
+            print(f"  -> out/calib_cam{n}.json", flush=True)
+            continue
         cal = load_anchor(n)
         source = Source(cal["video"])
         print(f"cam{n}: {cal['video']} ({source.duration:.0f} s)", flush=True)

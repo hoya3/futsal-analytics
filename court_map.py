@@ -8,6 +8,7 @@
 
 track.py를 돌린 캘리브레이션(version 2)은 카메라가 움직인 구간마다 호모그래피가 다르므로 t가 필수다. load()의 t는
 동기화 영상(*_sync.mp4)의 시각(초)이다. t는 스칼라 또는 점마다 하나씩이며, 코트를 확정하지 못한 구간(unresolved)의 점은 NaN을 돌려준다.
+구간 안에서 서서히 밀린 양(구간의 drift, px)은 시각에 맞춰 보간해 픽셀에서 뺀 뒤 변환한다.
 """
 import json
 import os
@@ -44,6 +45,8 @@ def load(n, out_dir="out"):
     with open(sync_path) as f:
         sync = json.load(f)
     name = sync["cameras"][str(n)]
+    if os.path.basename(cal["video"]) == name:  # 동기화 영상으로 직접 추적한 결과는 이미 그 시각이다
+        return cal
     entry = sync["videos"][name]
     return to_sync_time(cal, os.path.join(os.path.dirname(cal["video"]), name), entry["source_time_of_output_0_s"], entry["duration_s"])
 
@@ -56,8 +59,28 @@ def to_sync_time(cal, video_path, source_time_of_output_0, duration):
     for seg in cal["segments"]:
         t0, t1 = max(seg["t0"] - off, 0.0), min(seg["t1"] - off, duration)
         if t1 > t0:
-            segments.append({**seg, "t0": t0, "t1": t1})
+            moved = {**seg, "t0": t0, "t1": t1}
+            if seg.get("drift"):
+                moved["drift"] = [[t - off, dx, dy] for t, dx, dy in seg["drift"]]
+            segments.append(moved)
     return {**cal, "video": video_path, "t_sec": cal["t_sec"] - off, "segments": segments}
+
+
+def drift_at(seg, t):
+    """구간 행렬 대비 시각 t의 서서히 밀린 양 (N, 2) px. track.py가 잰 drift가 없으면 0."""
+    t = np.atleast_1d(np.asarray(t, np.float64))
+    d = seg.get("drift")
+    if not d:
+        return np.zeros((len(t), 2))
+    d = np.asarray(d, np.float64)
+    return np.c_[np.interp(t, d[:, 0], d[:, 1]), np.interp(t, d[:, 0], d[:, 2])]
+
+
+def homographies_at(seg, t):
+    """시각 t의 (H_near, H_far), 이미지 -> 코트. 화면을 펼치거나 선을 그리는 코드가 쓴다."""
+    dx, dy = drift_at(seg, t)[0]
+    back = np.array([[1.0, 0.0, -dx], [0.0, 1.0, -dy], [0.0, 0.0, 1.0]])
+    return np.array(seg["H_near"], np.float64) @ back, np.array(seg["H_far"], np.float64) @ back
 
 
 def _apply(H_near, H_far, half, px):
@@ -82,5 +105,5 @@ def pixel_to_court(cal, px, t=None):
         seg = segments[i]
         sel = (which == i) & (times <= seg["t1"])
         if seg["source"] != "unresolved" and sel.any():
-            out[sel] = _apply(seg["H_near"], seg["H_far"], cal["half"], px[sel])
+            out[sel] = _apply(seg["H_near"], seg["H_far"], cal["half"], px[sel] - drift_at(seg, times[sel])[:, None])
     return out

@@ -1,13 +1,14 @@
-"""마우스만으로 하는 코트 캘리브레이션: 카메라당 5번 클릭, 모두 카메라 쪽(가까운) 하프에서.
+"""마우스만으로 하는 코트 캘리브레이션: 카메라당 7번 클릭 (카메라 쪽 5점 + 먼 쪽 코너 2점).
 
 호모그래피 하나로는 두 하프를 다 맞출 수 없으므로(카메라가 낮아서 야외 코트의 약간의 굴곡에도 먼 하프가
 어긋남) 카메라마다 두 개를 둔다
-  H_near: 이미지 px -> 코트 m, 카메라 쪽 하프(선수를 추적하는 영역)에서 유효 - 5번의 클릭으로 구함
+  H_near: 이미지 px -> 코트 m, 카메라 쪽 하프(선수를 추적하는 영역)에서 유효 - 카메라 쪽 5점으로 구함
   H_far:  이미지 px -> 코트 m, 하프라인 너머에서 유효(다른 카메라가 못 보는 곳을 채움).
-          처음엔 H_near와 같고, refine.py가 하프라인 위의 모든 점은 H_near가 놓은 자리에 고정한 채
-          흰 선에 맞추므로, 두 호모그래피가 하프라인 전체에서 일치한다.
+          먼 쪽 코너 2점으로 시작하고, refine.py가 하프라인 위의 모든 점은 H_near가 놓은 자리에 고정한 채
+          코너와 흰 선에 맞추므로, 두 호모그래피가 하프라인 전체에서 일치한다.
 
-사용법: python calibrate.py camera1.mp4 camera2.mp4      (이미지도 가능; "-"는 해당 카메라 건너뜀, 예: - camera2.mp4)
+사용법: python calibrate.py camera1.mp4 camera2.mp4 [--auto] [--court 38x18]  (이미지도 가능; "-"는 해당 카메라 건너뜀, 예: - camera2.mp4)
+  --auto: 자동 인식 후보를 먼저 보여 준다 (y = 승인, n 또는 실패 = 5클릭).
   t=60 s에서 시작(영상 처음 ~30 s 동안 폰이 움직였음). 랜드마크를 아무도 가리지 않는 프레임을 고른다:
   a/d = -/+ 10 s, z/c = -/+ 1 s (첫 클릭 전에만).
   좌/우는 화면에 보이는 기준. 미니맵(왼쪽 아래)에 다음 점이 빨간색으로 표시된다.
@@ -24,7 +25,8 @@ from dataclasses import asdict
 import cv2
 import numpy as np
 
-from calib_core import Source, click_landmarks, draw_overlay, solve_half
+from auto_init import auto_calibrate_video, median_of
+from calib_core import Source, click_landmarks, draw_overlay, manual_json, manual_result
 from court import DEFAULT_SPEC, CourtSpec, court_lines
 
 
@@ -47,11 +49,7 @@ class Calibrator:
     def _solve(self):
         if not self.done:
             return
-        idx = list(range(len(self.lms)))
-        H, world, err = solve_half(self.clicks, self.lms, self.half, self.spec)
-        near = (H, dict(zip(idx, world)), dict(zip(idx, err)))
-        far_idx = [i for i, lm in enumerate(self.lms) if "far" in lm["halves"]]  # 먼 하프 피팅의 앵커
-        self.result = {"near": near, "far": (H, {i: near[1][i] for i in far_idx}, {i: near[2][i] for i in far_idx})}
+        self.result = manual_result(self.clicks, self.lms, self.half, self.spec)
 
     def click(self, x, y):
         if not self.done:
@@ -126,20 +124,46 @@ class Calibrator:
         view[200:200 + big.shape[0], bx:bx + big.shape[1]] = big
 
     def to_json(self, video=None):
-        return {
-            "half": self.half, "video": video, "t_sec": self.t, "spec": asdict(self.spec),
-            "names": [lm["name"] for lm in self.lms],
-            "img_pts": [list(map(float, c)) for c in self.clicks],
-            "world": {region: {str(i): list(map(float, p)) for i, p in self.result[region][1].items()} for region in ("near", "far")},
-            "H_near": self.result["near"][0].tolist(),
-            "H_far": self.result["far"][0].tolist(),
-        }
+        return manual_json(self.result, self.clicks, self.lms, self.half, self.spec, video, self.t)
 
     def save(self, out_json, video=None):
         cv2.imwrite(out_json.replace("H_", "frame_").replace(".json", ".jpg"), self.frame)
         with open(out_json, "w") as f:
             json.dump(self.to_json(video), f, indent=2)
         cv2.imwrite(out_json.replace(".json", "_overlay.jpg"), self.render())
+
+
+def review_auto(n, path, half, spec):
+    """자동 인식 후보를 보여 준다. y = 승인(저장하고 True), n = 5클릭으로 진행(False). 후보가 없어도 False."""
+    src = Source(path)
+    print(f"cam{n}: 자동 인식 중 (약 3분)...", flush=True)
+    r = auto_calibrate_video(src, half, spec, log=lambda m: print(m, flush=True))
+    if r["status"] != "ok":
+        print(f"cam{n}: 자동 인식 실패 ({r['status']}, {r.get('votes', 0)}/{r.get('windows', 0)}표) -> 5클릭으로 진행")
+        return False
+    frame = median_of(src, r["t_sec"])
+    win = f"cam{n} auto - y: accept, n: manual"
+    view = draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), half, spec)
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, 1280, 720)
+    while True:
+        cv2.imshow(win, view)
+        key = cv2.waitKey(30) & 0xFF
+        if key in (ord("y"), ord("n")):
+            break
+    cv2.destroyWindow(win)
+    if key == ord("n"):
+        return False
+    d = {"half": half, "video": path, "t_sec": r["t_sec"], "spec": asdict(spec), "source": "auto",
+         "H_near": r["H_near"], "H_far": r["H_far"]}
+    os.makedirs("out", exist_ok=True)
+    cv2.imwrite(f"out/frame_cam{n}.jpg", frame)
+    cv2.imwrite(f"out/H_cam{n}_overlay.jpg", view)
+    for name in (f"out/H_cam{n}.json", f"out/H_cam{n}_refined.json"):  # 자동 후보는 이미 흰 선에 맞춰져 있다
+        with open(name, "w") as f:
+            json.dump(d, f, indent=2)
+    print(f"cam{n}: 자동 후보 승인 -> out/H_cam{n}_refined.json")
+    return True
 
 
 def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC):  # 처음 ~30 s 동안은 두 폰 모두 아직 조정 중이었음
@@ -189,8 +213,13 @@ if __name__ == "__main__":
         i = args.index("--court")
         spec = CourtSpec(*map(float, args[i + 1].lower().split("x")))
         del args[i:i + 2]
+    use_auto = "--auto" in args  # 자동 후보를 먼저 보여 주고 y/n으로 고른다
+    if use_auto:
+        args.remove("--auto")
     for n, (path, half) in enumerate(zip(args[:2], ("east", "west")), start=1):
         if path == "-":  # 이 카메라의 기존 캘리브레이션 유지
+            continue
+        if use_auto and review_auto(n, path, half, spec):
             continue
         if not run_camera(n, path, half, spec=spec):
             break

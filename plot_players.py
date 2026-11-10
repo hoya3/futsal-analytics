@@ -20,13 +20,13 @@ import numpy as np
 
 from court import spec_of
 from court_map import load, pixel_to_court
-from topdown import S
+from topdown import Canvas
 
 COLORS = [(66, 135, 245), (60, 200, 60), (245, 90, 60), (200, 60, 200), (0, 200, 220), (240, 240, 60), (255, 255, 255)]
 
 
-def to_canvas(xy, spec):
-    return int((xy[0] + spec.length / 2) * S), int((spec.width / 2 - xy[1]) * S)
+def to_canvas(xy, geo):
+    return tuple(int(v) for v in geo.px([xy])[0])
 
 
 def main(path, t=None, bg="out/topdown.jpg"):
@@ -34,7 +34,7 @@ def main(path, t=None, bg="out/topdown.jpg"):
     if t is not None:
         rows = [r for r in rows if abs(float(r["t"]) - t) < 0.1]
     cals = {n: load(n) for n in (1, 2)}
-    spec = spec_of(cals[1])
+    geo = Canvas(spec_of(cals[1]))
     for n in (1, 2):
         sel = [r for r in rows if int(r["cam"]) == n]
         if sel:
@@ -48,7 +48,7 @@ def main(path, t=None, bg="out/topdown.jpg"):
     for r in sorted(rows, key=lambda r: float(r["t"])):
         if r["X_m"] == "":
             continue
-        c = to_canvas((r["X_m"], r["Y_m"]), spec)
+        c = to_canvas((r["X_m"], r["Y_m"]), geo)
         color = COLORS[int(r["id"]) % len(COLORS)]
         if t is None:
             cv2.circle(canvas, c, 3, color, -1)

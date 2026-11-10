@@ -1,4 +1,6 @@
 """화면(OpenCV 창) 없이 도는 캘리브레이션 공용 로직. GUI(calibrate.py)와 서버 처리가 함께 쓴다."""
+from dataclasses import asdict
+
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
@@ -9,7 +11,7 @@ HALF_SIGN = {"east": 1, "west": -1}
 
 
 def click_landmarks(spec=DEFAULT_SPEC):
-    """5클릭 랜드마크.
+    """7클릭 랜드마크. 앞의 5점은 카메라 쪽 절반(H_near), 뒤의 2점(먼 쪽 코너)은 H_far에만 쓴다.
 
     동쪽 골대를 바라보는 카메라 기준 코트 좌표: x = 코트 길이 방향(카메라 쪽이 x<0), y = 화면의 왼쪽.
     kind "point": 정확한 랜드마크. kind "line": 오른쪽 사이드라인(y = -W/2) 위의 아무 점; 선을 따른 위치는
@@ -24,6 +26,8 @@ def click_landmarks(spec=DEFAULT_SPEC):
         {"name": "halfway line, right end", "kind": "point", "xy": (0.0, -W2), "halves": ("near", "far")},
         {"name": "right sideline: any point low in the picture", "kind": "line", "xy": (-0.7 * L2, -W2), "halves": ("near",)},
         {"name": "10 m spot (small white dot)", "kind": "point", "xy": (-(L2 - 10.0), 0.0), "halves": ("near",)},
+        {"name": "FAR left corner", "kind": "point", "xy": (L2, W2), "halves": ("far",)},
+        {"name": "FAR right corner", "kind": "point", "xy": (L2, -W2), "halves": ("far",)},
     ]
 
 
@@ -65,6 +69,51 @@ def solve_half(img_pts, lms, half, spec=DEFAULT_SPEC):
     H, world = unpack(sol.x)
     err = np.linalg.norm(sol.fun.reshape(-1, 2), axis=1)
     return H, world, err
+
+
+def manual_result(clicks, lms, half, spec=DEFAULT_SPEC):
+    """클릭의 호모그래피. {"near": (H, 월드 좌표, 오차), "far": ...}.
+    near는 카메라 쪽 점만으로 풀고, far는 하프라인을 near와 공유한 채 먼 쪽 코너에 맞춘다."""
+    near_idx = [i for i, lm in enumerate(lms) if "near" in lm["halves"]]
+    H, world, err = solve_half([clicks[i] for i in near_idx], [lms[i] for i in near_idx], half, spec)
+    near = (H, dict(zip(near_idx, world)), dict(zip(near_idx, err)))
+    far_world, far_err = {}, {}
+    beyond = [i for i, lm in enumerate(lms) if "near" not in lm["halves"]]  # 하프라인 너머의 점
+    for i, lm in enumerate(lms):
+        if "far" in lm["halves"]:
+            far_world[i] = near[1][i] if i in near[1] else np.array(to_world(lm["xy"], half), float)
+            far_err[i] = near[2].get(i, 0.0)
+    H_far = far_from_anchors(H, [far_world[i] for i in beyond], [clicks[i] for i in beyond])
+    return {"near": near, "far": (H_far, far_world, far_err)}
+
+
+def manual_json(result, clicks, lms, half, spec=DEFAULT_SPEC, video=None, t=0.0):
+    """5클릭 결과의 저장 형식 (out/H_cam<N>.json, refine.py의 입력)."""
+    return {
+        "half": half, "video": video, "t_sec": t, "spec": asdict(spec),
+        "names": [lm["name"] for lm in lms],
+        "img_pts": [list(map(float, c)) for c in clicks],
+        "world": {region: {str(i): list(map(float, p)) for i, p in result[region][1].items()} for region in ("near", "far")},
+        "H_near": result["near"][0].tolist(),
+        "H_far": result["far"][0].tolist(),
+    }
+
+
+def far_from_anchors(H_near, anchor_world, anchor_img):
+    """H_far = H_near o K, K = I + v [1 0 0] (하프라인 전체를 고정). v를 먼 쪽 기준점에 맞춘다. 기준점이 없으면 H_near."""
+    if len(anchor_world) == 0:
+        return H_near
+    world, img = np.asarray(anchor_world, float), np.asarray(anchor_img, float)
+    G = front_facing(np.linalg.inv(H_near))
+    homog = np.c_[world, np.ones(len(world))]
+
+    def residual(v):
+        q = homog @ (G @ (np.eye(3) + np.outer(v, [1.0, 0.0, 0.0]))).T
+        return (q[:, :2] / q[:, 2:3] - img).ravel()
+
+    v = least_squares(residual, np.zeros(3), x_scale=[1e-3, 1e-3, 1e-4]).x
+    H = np.linalg.inv(G @ (np.eye(3) + np.outer(v, [1.0, 0.0, 0.0])))
+    return H / H[2, 2]
 
 
 def front_facing(Hc2i):

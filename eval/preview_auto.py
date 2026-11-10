@@ -50,7 +50,7 @@ def main(args):
         results.append(r)
         seg = truth_segment(cal, t)
         view = frame.copy()
-        err = "기준 없음"
+        err = "no reference"
         if r["H_near"] is not None:
             view = draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), cal["half"], spec)
         if seg is not None:

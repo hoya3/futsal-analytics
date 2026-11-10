@@ -1,0 +1,460 @@
+{
+ "labels": [
+  {
+   "cam": 1,
+   "t": 300.0,
+   "video": "/mnt/d/02_Projects/\ucea1\uc2a4\ud1a4/20261008_170919_sync.mp4",
+   "half": "east",
+   "points": [
+    {
+     "id": "circle_left",
+     "kind": "point",
+     "region": "center",
+     "px": [
+      710.0,
+      286.0
+     ],
+     "world": [
+      0.0,
+      3.0
+     ]
+    },
+    {
+     "id": "far_10m",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1115.0,
+      253.0
+     ],
+     "world": [
+      10.0,
+      0.0
+     ]
+    },
+    {
+     "id": "far_corner_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      905.0,
+      217.0
+     ],
+     "world": [
+      20.0,
+      10.0
+     ]
+    },
+    {
+     "id": "far_corner_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1668.0,
+      244.0
+     ],
+     "world": [
+      20.0,
+      -10.0
+     ]
+    },
+    {
+     "id": "far_arc_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      979.0,
+      218.0
+     ],
+     "world": [
+      20.0,
+      7.5
+     ]
+    },
+    {
+     "id": "far_arc_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1554.0,
+      238.0
+     ],
+     "world": [
+      20.0,
+      -7.5
+     ]
+    },
+    {
+     "id": "far_post_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1201.0,
+      226.0
+     ],
+     "world": [
+      20.0,
+      1.5
+     ]
+    },
+    {
+     "id": "far_post_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1319.0,
+      231.0
+     ],
+     "world": [
+      20.0,
+      -1.5
+     ]
+    },
+    {
+     "id": "right_sideline",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      1180.0,
+      749.0
+     ],
+     "curve": "right_sideline"
+    },
+    {
+     "id": "near_arc",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      3.0,
+      475.0
+     ],
+     "curve": "near_arc"
+    },
+    {
+     "id": "circle_near",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      740.0,
+      316.0
+     ],
+     "curve": "circle"
+    },
+    {
+     "id": "circle_far",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      962.0,
+      278.0
+     ],
+     "curve": "circle"
+    }
+   ]
+  },
+  {
+   "cam": 1,
+   "t": 1100.0,
+   "video": "/mnt/d/02_Projects/\ucea1\uc2a4\ud1a4/20261008_170919_sync.mp4",
+   "half": "east",
+   "points": [
+    {
+     "id": "circle_left",
+     "kind": "point",
+     "region": "center",
+     "px": [
+      718.0,
+      287.0
+     ],
+     "world": [
+      0.0,
+      3.0
+     ]
+    },
+    {
+     "id": "far_10m",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1116.0,
+      251.0
+     ],
+     "world": [
+      10.0,
+      0.0
+     ]
+    },
+    {
+     "id": "far_corner_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      909.0,
+      215.0
+     ],
+     "world": [
+      20.0,
+      10.0
+     ]
+    },
+    {
+     "id": "far_corner_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1671.0,
+      241.0
+     ],
+     "world": [
+      20.0,
+      -10.0
+     ]
+    },
+    {
+     "id": "far_arc_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      985.0,
+      218.0
+     ],
+     "world": [
+      20.0,
+      7.5
+     ]
+    },
+    {
+     "id": "far_arc_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1553.0,
+      236.0
+     ],
+     "world": [
+      20.0,
+      -7.5
+     ]
+    },
+    {
+     "id": "far_post_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1204.0,
+      225.0
+     ],
+     "world": [
+      20.0,
+      1.5
+     ]
+    },
+    {
+     "id": "far_post_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1323.0,
+      228.0
+     ],
+     "world": [
+      20.0,
+      -1.5
+     ]
+    },
+    {
+     "id": "right_sideline",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      1185.0,
+      742.0
+     ],
+     "curve": "right_sideline"
+    },
+    {
+     "id": "near_arc",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      19.0,
+      476.0
+     ],
+     "curve": "near_arc"
+    },
+    {
+     "id": "circle_near",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      752.0,
+      315.0
+     ],
+     "curve": "circle"
+    },
+    {
+     "id": "circle_far",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      970.0,
+      278.0
+     ],
+     "curve": "circle"
+    }
+   ]
+  },
+  {
+   "cam": 2,
+   "t": 1100.0,
+   "video": "/mnt/d/02_Projects/\ucea1\uc2a4\ud1a4/20261008_171122_sync.mp4",
+   "half": "west",
+   "points": [
+    {
+     "id": "circle_left",
+     "kind": "point",
+     "region": "center",
+     "px": [
+      751.0,
+      122.0
+     ],
+     "world": [
+      -0.0,
+      -3.0
+     ]
+    },
+    {
+     "id": "far_10m",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1190.0,
+      95.0
+     ],
+     "world": [
+      -10.0,
+      -0.0
+     ]
+    },
+    {
+     "id": "far_corner_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      949.0,
+      40.0
+     ],
+     "world": [
+      -20.0,
+      -10.0
+     ]
+    },
+    {
+     "id": "far_corner_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1814.0,
+      96.0
+     ],
+     "world": [
+      -20.0,
+      10.0
+     ]
+    },
+    {
+     "id": "far_arc_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1031.0,
+      46.0
+     ],
+     "world": [
+      -20.0,
+      -7.5
+     ]
+    },
+    {
+     "id": "far_arc_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1684.0,
+      87.0
+     ],
+     "world": [
+      -20.0,
+      7.5
+     ]
+    },
+    {
+     "id": "far_post_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1261.0,
+      62.0
+     ],
+     "world": [
+      -20.0,
+      -1.5
+     ]
+    },
+    {
+     "id": "far_post_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      1394.0,
+      70.0
+     ],
+     "world": [
+      -20.0,
+      1.5
+     ]
+    },
+    {
+     "id": "right_sideline",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      1535.0,
+      683.0
+     ],
+     "curve": "right_sideline"
+    },
+    {
+     "id": "near_arc",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      7.0,
+      318.0
+     ],
+     "curve": "near_arc"
+    },
+    {
+     "id": "circle_near",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      817.0,
+      159.0
+     ],
+     "curve": "circle"
+    },
+    {
+     "id": "circle_far",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      1028.0,
+      122.0
+     ],
+     "curve": "circle"
+    }
+   ]
+  }
+ ]
+}
