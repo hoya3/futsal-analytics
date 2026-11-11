@@ -53,8 +53,28 @@ def detect(frame, model=None, imgsz=960):
     return {name: xy[i] for i, (name, _) in enumerate(keypoints()) if conf[i] >= CONF_MIN}
 
 
-def keypoint_calibrate(frame, half, spec=DEFAULT_SPEC, model=None):
-    """{status, H_near, H_far, n_near, n_far}. status: ok / failed(지점 부족)."""
+def keypoint_calibrate(frame, half, spec=DEFAULT_SPEC, model=None, try_flip=True):
+    """{status, H_near, H_far, n_near, n_far, confidence, flipped}. status: ok / failed(지점 부족).
+    try_flip: 좌우 반전한 프레임으로도 풀어 흰 선 일치율이 높은 쪽을 쓴다. 카메라가 반대쪽 모서리에 서면(1103 촬영)
+    화면이 좌우 반전이라, 그 배치를 덜 본 모델도 반전 프레임에서는 지점을 찾는다 (반전 결과는 원래 픽셀로 되돌린다)."""
+    best = {**_calibrate_once(frame, half, spec, model), "flipped": False}
+    if try_flip:
+        f = _calibrate_once(np.ascontiguousarray(frame[:, ::-1]), half, spec, model)
+        if f["status"] == "ok" and (best["status"] != "ok" or f["confidence"] > best["confidence"]):
+            best = unflip(f, frame.shape[1], half)
+    return best
+
+
+def unflip(r, width, half):
+    """좌우 반전 프레임의 결과를 원래 프레임으로: 화면 x 반전 F와 코트 y 반전 M (코트는 긴 축에 대칭이라 같은 코트)."""
+    F = np.array([[-1.0, 0.0, width - 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    M = np.diag([1.0, -1.0, 1.0])
+    H_near, H_far = M @ np.array(r["H_near"]) @ F, M @ np.array(r["H_far"]) @ F
+    G_east = front_facing(np.linalg.inv((np.eye(3) if half == "east" else ROT180) @ H_near))
+    return {**r, "H_near": H_near.tolist(), "H_far": H_far.tolist(), "_G": G_east, "flipped": True}
+
+
+def _calibrate_once(frame, half, spec=DEFAULT_SPEC, model=None):
     found = detect(frame, model)
     names = dict(keypoints(spec))
     near = [(to_world(names[k], half), p) for k, p in found.items() if names[k][0] <= 0]

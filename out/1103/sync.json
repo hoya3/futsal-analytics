@@ -1,0 +1,41 @@
+{
+ "offset_a_minus_b_s": 196.11,
+ "offset_uncertainty_s": 0.02,
+ "method": "player foot points of both cameras on the court plane, 2 x 60 s (196.100, 196.121). Audio onsets give 195.963, pulled 0.146 s by a sound source next to one phone (about 50 m at 343 m/s).",
+ "clock_drift": "none measurable: audio first half 195.963, second half 195.962; fit -5 +- 19 ppm",
+ "cut": "stream copy, no re-encoding",
+ "output_a_minus_b_s": -0.0108,
+ "videos": {
+  "20261103_165422_sync.mp4": {
+   "source": "20261103_165422.mp4",
+   "source_time_of_output_0_s": 229.128,
+   "frames_checked_start": "200/200",
+   "frames_checked_40min": "60/60",
+   "shift_at_40min_s": 229.128,
+   "video_frames": 106394,
+   "source_frames": 113291,
+   "duration_s": 3541.280133,
+   "video_start_s": 0.0,
+   "audio_start_s": 0.0,
+   "bytes": 5518545678
+  },
+  "20261103_165851_sync.mp4": {
+   "source": "20261103_165851.mp4",
+   "source_time_of_output_0_s": 33.0288,
+   "frames_checked_start": "200/200",
+   "frames_checked_40min": "60/60",
+   "shift_at_40min_s": 33.0288,
+   "video_frames": 106032,
+   "source_frames": 107022,
+   "duration_s": 3533.906478,
+   "video_start_s": 0.0,
+   "audio_start_s": 0.0,
+   "bytes": 7621377231
+  }
+ },
+ "cameras": {
+  "1": "20261103_165422_sync-001.mp4",
+  "2": "20261103_165851_sync-002.mp4"
+ },
+ "files_note": "D 드라이브의 파일 이름은 videos 키에 -001/-002가 붙은 것. 보정은 이 동기화 파일에 직접 하므로 시각 변환은 없다."
+}

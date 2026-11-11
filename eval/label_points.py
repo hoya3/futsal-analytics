@@ -5,7 +5,7 @@
     a/d = -/+ 10 s, z/c = -/+ 1 s (첫 클릭 전에만)
   미니맵의 빨간 점이 지금 찍을 지점이다. 넓은 선은 폭의 가운데를 찍는다. 돋보기로 픽셀 단위까지 맞춘다.
   확실하지 않은 지점은 s로 건너뛴다. 잘못 찍은 점 하나가 평가를 망친다.
-결과: eval/labels.json (프레임마다 저장되므로 중간에 끊어도 이어서 할 수 있다). 채점: python eval/score_points.py
+결과: out/<회차>/labels.json (프레임마다 저장되므로 중간에 끊어도 이어서 할 수 있다). 채점: python eval/score_points.py
 """
 import argparse
 import json
@@ -18,12 +18,12 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from auto_init import median_of  # noqa: E402
-from calib_core import Source, to_world  # noqa: E402
+from calib_core import Source, out_path, to_world  # noqa: E402
 from calibrate import Calibrator  # noqa: E402
 from court import DEFAULT_SPEC, court_lines, spec_of  # noqa: E402
 from court_map import load  # noqa: E402
 
-LABELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "labels.json")
+LABELS_PATH = out_path("labels.json")  # 회차별 (out/<FUTSAL_MATCH>/labels.json)
 DEFAULT_TIMES = (300.0, 1100.0, 2000.0)
 
 

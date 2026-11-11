@@ -3,7 +3,9 @@
 카메라가 고정된 구간의 프레임을 뽑고, 코트 지점을 그 시각의 호모그래피로 화면에 투영해 정답을 만든다.
 지점 이름은 '카메라에서 본' 기준이다(near/far, 왼쪽/오른쪽). 그래서 서로 마주 보는 두 카메라가 같은 의미를 갖는다.
 
-사용법: python train/make_dataset.py [--step 3] [--out train/dataset] [--limit 0]
+회차(out/<회차>/)마다 카메라 배치가 달라(1103은 1008의 좌우 반전 + 더 높은 위치) 여러 회차를 섞어 만든다.
+
+사용법: python train/make_dataset.py [--matches 1008 1103] [--step 3] [--out train/dataset] [--limit 0]
 출력: train/dataset/{images,labels}/{train,val}, data.yaml, train/court_pose_dataset.zip, train/preview/*.jpg
 """
 import argparse
@@ -17,7 +19,7 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from calib_core import Source, front_facing, to_world  # noqa: E402
+from calib_core import Source, front_facing, match_dir, to_world  # noqa: E402
 from court import DEFAULT_SPEC, spec_of  # noqa: E402
 from court_map import homographies_at, load  # noqa: E402
 
@@ -26,8 +28,9 @@ EDGE_MARGIN = 5  # 화면 끝에서 이만큼(px, 1080p) 안쪽만 보이는 점
 MIN_KEYPOINTS = 4
 BOUNDARY_GUARD = 1.0  # 카메라가 움직인 구간 경계에서 제외하는 시간 (s)
 VAL_BLOCK = 120.0  # 시간 블록(s) 5개 중 1개를 검증용으로: 이웃 프레임이 학습과 검증에 나뉘지 않게
-UNRELIABLE = {2: {"far_corner_left", "far_corner_right", "far_arc_left", "far_arc_right", "far_post_left", "far_post_right"}}
-# 검증 점 채점에서 cam2의 먼 골라인은 1.7~3.4 m 어긋났다. 틀린 정답을 가르치지 않도록 라벨에서 뺀다.
+UNRELIABLE = {"1008": {2: {"far_corner_left", "far_corner_right", "far_arc_left", "far_arc_right", "far_post_left", "far_post_right"}}}
+# 회차 -> 카메라 -> 라벨에서 뺄 지점. 1008 검증 점 채점에서 cam2의 먼 골라인은 1.7~3.4 m 어긋났다. 틀린 정답을 가르치지 않도록 뺀다.
+MATCHES = ("1008", "1103")
 
 
 def keypoints(spec=DEFAULT_SPEC):
@@ -48,10 +51,10 @@ def keypoints(spec=DEFAULT_SPEC):
 FLIP_IDX = [1, 0, 3, 2, 4, 5, 7, 6, 9, 8, 11, 10, 12]
 
 
-def project_keypoints(seg, half, cam, spec=DEFAULT_SPEC, size=(1920, 1080), t=None):
+def project_keypoints(seg, half, cam, spec=DEFAULT_SPEC, size=(1920, 1080), t=None, match="1008"):
     """구간의 호모그래피로 키포인트를 화면에 투영한다. (N, 3) [x, y, v] (px), v = 2 보임 / 0 라벨 없음.
     t를 주면 구간 안의 느린 밀림(seg["drift"])을 반영한다. 먼 쪽은 1 px가 약 0.3 m라 정답에 밀림이 섞이면 안 된다."""
-    skip = UNRELIABLE.get(cam, set())
+    skip = UNRELIABLE.get(match, {}).get(cam, set())
     H_near, H_far = homographies_at(seg, t) if t is not None else (seg["H_near"], seg["H_far"])
     out = np.zeros((len(keypoints(spec)), 3))
     for i, (name, xy) in enumerate(keypoints(spec)):
@@ -115,6 +118,7 @@ def main():
     p.add_argument("--out", default=os.path.join(ROOT, "train", "dataset"))
     p.add_argument("--limit", type=int, default=0, help="카메라당 최대 프레임 수 (시험용)")
     p.add_argument("--no-zip", action="store_true")
+    p.add_argument("--matches", nargs="+", default=list(MATCHES), help="섞을 촬영 회차 (out/<회차>/calib_cam<N>.json)")
     a = p.parse_args()
     if os.path.exists(a.out):
         shutil.rmtree(a.out)
@@ -125,11 +129,12 @@ def main():
     os.makedirs(preview, exist_ok=True)
 
     counts = {"train": 0, "val": 0}
-    for n in (1, 2):
-        cal = load(n)
+    per_match = {}
+    for m, n in [(m, n) for m in a.matches for n in (1, 2)]:
+        cal = load(n, match_dir(m))
         spec = spec_of(cal)
         if "segments" not in cal:
-            raise SystemExit(f"cam{n}: 시간별 캘리브레이션이 없습니다")
+            raise SystemExit(f"{m} cam{n}: 시간별 캘리브레이션이 없습니다 (FUTSAL_MATCH={m} python track.py {n})")
         names = [k for k, _ in keypoints(spec)]
         source = Source(cal["video"])
         times = np.arange(a.step / 2, source.duration, a.step)
@@ -141,12 +146,12 @@ def main():
             seg = usable_segment(cal, t)
             if seg is None:
                 continue
-            kp = project_keypoints(seg, cal["half"], n, spec, t=t)
+            kp = project_keypoints(seg, cal["half"], n, spec, t=t, match=m)
             line = yolo_line(kp)
             frame = source.frame_at(t) if line else None
             if frame is None:
                 continue
-            stem, s = f"cam{n}_{t:07.1f}", split_of(t)
+            stem, s = f"{m}_cam{n}_{t:07.1f}", split_of(t)
             small = cv2.resize(frame, (IMAGE_WIDTH, IMAGE_WIDTH * frame.shape[0] // frame.shape[1]), interpolation=cv2.INTER_AREA)
             cv2.imwrite(os.path.join(a.out, "images", s, stem + ".jpg"), small, [cv2.IMWRITE_JPEG_QUALITY, 90])
             with open(os.path.join(a.out, "labels", s, stem + ".txt"), "w") as f:
@@ -155,11 +160,12 @@ def main():
                 cv2.imwrite(os.path.join(preview, stem + ".jpg"), draw_preview(frame, kp, names))
             done += 1
             counts[s] += 1
+            per_match[m] = per_match.get(m, 0) + 1
             if done % 100 == 0:
-                print(f"cam{n}: {done} / {len(times)}", flush=True)
+                print(f"{m} cam{n}: {done} / {len(times)}", flush=True)
     with open(os.path.join(a.out, "data.yaml"), "w") as f:
         f.write(data_yaml())
-    print(f"학습 {counts['train']}장, 검증 {counts['val']}장 -> {a.out}", flush=True)
+    print(f"학습 {counts['train']}장, 검증 {counts['val']}장, 회차별 {per_match} -> {a.out}", flush=True)
     if not a.no_zip:
         path = shutil.make_archive(os.path.join(ROOT, "train", "court_pose_dataset"), "zip", a.out)
         print(f"-> {path} ({os.path.getsize(path) / 1e6:.0f} MB)", flush=True)

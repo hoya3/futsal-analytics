@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
-from calib_core import Source, draw_overlay, front_facing, in_half
+from calib_core import Source, draw_overlay, front_facing, in_half, out_path
 from court import spec_of
 from court_map import load_anchor
 from refine import CIRCLE_PAD, FAR_MARGIN, far_anchors, icp_align, icp_align_far, project, ridge_map, sample_model
@@ -43,6 +43,12 @@ class TrackConfig:
     drift_step: float = 30.0  # 구간 안 밀림 측정 간격 (s)
     drift_frames: int = 5  # 측정 시각마다 합치는 프레임 수 (선수를 지운다)
     drift_span: float = 2.0  # 그 프레임들을 뽑는 범위 (+- s)
+    # 배경 특징점(펜스, 건물, 차)으로 카메라 이동을 먼저 재고 흰 선은 그 주변에서만 맞춘다. 흰 선만 보면 사이드라인을
+    # 따라 미끄러진 위치도 비슷한 점수를 받는다 (1103 cam1: 실제로는 고정인데 (-23,-31), (-60,-82)로 잘못 추적,
+    # 야간 조명 구간은 미끄러진 쪽 점수가 더 높음)
+    use_features: bool = True
+    feature_radius: int = 4  # 특징점 이동 주변 흰 선 탐색 반경 (px)
+    feature_min_inliers: int = 20  # 같은 이동을 가리키는 매칭 수. 우연한 매칭은 한 점에 모이지 않는다
 
 
 @dataclass
@@ -52,6 +58,42 @@ class Sample:
     dy: float
     score: float
     ok: bool = False
+    by: str = "lines"  # lines: 흰 선으로 확인 / features: 선은 흐리지만 배경 특징점으로 확인된 이동
+
+
+FEATURE_SCALE = 0.5  # 특징점은 절반 해상도에서 찾는다
+_CLAHE = cv2.createCLAHE(3.0, (8, 8))  # 밝기 평준화: 야간 조명이 켜져도 낮 프레임과 맞는다 (1103 cam1, 2845 s)
+
+
+def describe(frame):
+    """배경 특징점 (좌표는 원본 px, 기술자). 프레임이 없으면 None."""
+    if frame is None:
+        return None
+    gray = _CLAHE.apply(cv2.cvtColor(cv2.resize(frame, None, fx=FEATURE_SCALE, fy=FEATURE_SCALE, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY))
+    kp, desc = cv2.SIFT_create(3000).detectAndCompute(gray, None)
+    if desc is None or len(kp) < 10:
+        return None
+    return np.float32([k.pt for k in kp]) / FEATURE_SCALE, desc
+
+
+def background_shift(a, b, min_inliers=20):
+    """특징점 a -> b의 카메라 평행이동 (dx, dy) px. 배율이나 회전이 섞였거나 근거가 약하면 None."""
+    if a is None or b is None:
+        return None
+    pairs = cv2.BFMatcher().knnMatch(a[1], b[1], k=2)
+    good = [m for m in pairs if len(m) == 2 and m[0].distance < 0.7 * m[1].distance]
+    if len(good) < min_inliers:
+        return None
+    pa = a[0][[m[0].queryIdx for m in good]]
+    pb = b[0][[m[0].trainIdx for m in good]]
+    A, inl = cv2.estimateAffinePartial2D(pa, pb, ransacReprojThreshold=3.0)
+    if A is None or int(inl.sum()) < min_inliers or inl.mean() < 0.6:
+        return None
+    scale, rot = np.hypot(A[0, 0], A[1, 0]), np.degrees(np.arctan2(A[1, 0], A[0, 0]))
+    if abs(scale - 1) > 0.01 or abs(rot) > 0.3:  # 평행이동 모델로 다룰 수 없다: 흰 선 탐색에 맡긴다
+        return None
+    d = np.median(pb[inl.ravel() > 0] - pa[inl.ravel() > 0], axis=0)
+    return float(d[0]), float(d[1])
 
 
 def translation(dx, dy):
@@ -97,8 +139,10 @@ def estimate_shift(ridge, G, pts, center, radius):
     px = visible_px(translation(*center) @ G, pts, ridge.shape) - center
     if len(px) < 50:
         return (*center, 0.0)
-    dx, dy, _ = search_shift(field, px, center, radius, 4)
-    dx, dy, _ = search_shift(field, px, (dx, dy), 4, 1)
+    dx, dy = center
+    if radius > 4:  # 넓은 반경은 4 px 격자로 먼저 찾는다
+        dx, dy, _ = search_shift(field, px, center, radius, 4)
+    dx, dy, _ = search_shift(field, px, (dx, dy), min(radius, 4), 1)
     return dx, dy, line_score(ridge, translation(dx, dy) @ G, pts)
 
 
@@ -162,28 +206,42 @@ def measure_drift(source, result, cfg=TrackConfig(), log=lambda *_: None):
     return result
 
 
-def sample_at(source, t, G, pts, center, cfg, floor):
-    frame = source.frame_at(t)
+def sample_at(source, t, G, pts, center, cfg, floor, frame=None, radius=None, widen=True):
+    frame = source.frame_at(t) if frame is None else frame
     if frame is None:
         return Sample(t, *center, 0.0)
     ridge = to_ridge(frame)
-    dx, dy, score = estimate_shift(ridge, G, pts, center, cfg.radius)
-    if score < floor:  # 폰을 크게 건드린 경우: 넓게 다시 찾는다
+    dx, dy, score = estimate_shift(ridge, G, pts, center, radius or cfg.radius)
+    if widen and score < floor:  # 폰을 크게 건드린 경우: 넓게 다시 찾는다
         wide = estimate_shift(ridge, G, pts, center, cfg.wide_radius)
         if wide[2] > score:
             dx, dy, score = wide
     return Sample(t, dx, dy, score, score >= floor)
 
 
-def walk(source, times, G, pts, start, cfg, floor, log):
-    """times 순서대로 샘플링한다. 탐색 중심은 마지막 유효 샘플의 이동."""
+def walk(source, times, G, pts, start, cfg, floor, log, start_frame=None):
+    """times 순서대로 샘플링한다. 탐색 중심은 마지막 유효 샘플의 이동.
+    배경 특징점으로 마지막 유효 샘플 대비 카메라 이동을 잴 수 있으면 그 자리 주변(feature_radius)에서만 흰 선을 맞추고,
+    흰 선이 흐려도(야간 조명) 그 이동을 받아들인다. 잴 수 없으면 흰 선만으로 찾는다."""
     center, out = start, []
+    ref = describe(start_frame) if cfg.use_features and start_frame is not None else None
     for t in times:
-        s = sample_at(source, t, G, pts, center, cfg, floor)
+        frame = source.frame_at(t)
+        cur = describe(frame) if cfg.use_features else None
+        moved = background_shift(ref, cur, cfg.feature_min_inliers)
+        if moved is not None:
+            guess = (center[0] + moved[0], center[1] + moved[1])
+            s = sample_at(source, t, G, pts, guess, cfg, floor, frame=frame, radius=cfg.feature_radius, widen=False)
+            if not s.ok:
+                s = Sample(t, *guess, s.score, True, "features")
+        else:
+            s = sample_at(source, t, G, pts, center, cfg, floor, frame=frame)
         if s.ok:
             center = (s.dx, s.dy)
+            ref = cur if cur is not None else ref
         out.append(s)
-        log(f"  t={t:8.1f}  shift=({s.dx:+.0f},{s.dy:+.0f})  score={s.score:.2f}  {'ok' if s.ok else 'LOST'}")
+        tag = "ok" if s.ok and s.by == "lines" else "ok(배경)" if s.ok else "LOST"
+        log(f"  t={t:8.1f}  shift=({s.dx:+.0f},{s.dy:+.0f})  score={s.score:.2f}  {tag}")
     return out
 
 
@@ -311,8 +369,8 @@ def track_camera(source, cal, cfg=TrackConfig(), log=lambda *_: None):
     start = Sample(t_a, dx0, dy0, score_a, True)
     forward = np.arange(t_a + cfg.step, source.duration, cfg.step)
     backward = np.arange(t_a - cfg.step, -1e-6, -cfg.step)
-    samples = walk(source, backward, G_near, near_pts, (dx0, dy0), cfg, floor, log)[::-1]
-    samples += [start] + walk(source, forward, G_near, near_pts, (dx0, dy0), cfg, floor, log)
+    samples = walk(source, backward, G_near, near_pts, (dx0, dy0), cfg, floor, log, frame)[::-1]
+    samples += [start] + walk(source, forward, G_near, near_pts, (dx0, dy0), cfg, floor, log, frame)
     # 앵커 자체의 측정 편향을 빼서, 앵커 구간의 이동이 0이 되게 한다
     for s in samples:
         s.dx -= dx0
@@ -381,7 +439,7 @@ def save_previews(source, result, n):
         frame = source.frame_at((seg["t0"] + seg["t1"]) / 2)
         if frame is not None:
             view = draw_overlay(frame, np.array(seg["H_near"]), np.array(seg["H_far"]), result["half"], spec)
-            cv2.imwrite(f"out/track_cam{n}_seg{k:02d}.jpg", view)
+            cv2.imwrite(out_path(f"track_cam{n}_seg{k:02d}.jpg"), view)
 
 
 def main(args):
@@ -391,11 +449,11 @@ def main(args):
     cams = [int(a) for a in args[: args.index("--step")]] if "--step" in args else [int(a) for a in args]
     for n in cams or (1, 2):
         if drift_only:
-            with open(f"out/calib_cam{n}.json") as f:
+            with open(out_path(f"calib_cam{n}.json")) as f:
                 result = json.load(f)
             print(f"cam{n}: 밀림만 다시 잰다 ({result['video']})", flush=True)
             measure_drift(Source(result["video"]), result, TrackConfig(), log=lambda m: print(m, flush=True))
-            with open(f"out/calib_cam{n}.json", "w") as f:
+            with open(out_path(f"calib_cam{n}.json"), "w") as f:
                 json.dump(result, f, indent=2)
             print(f"  -> out/calib_cam{n}.json", flush=True)
             continue
@@ -403,7 +461,7 @@ def main(args):
         source = Source(cal["video"])
         print(f"cam{n}: {cal['video']} ({source.duration:.0f} s)", flush=True)
         result = track_camera(source, cal, TrackConfig(step=step), log=lambda m: print(m, flush=True))
-        with open(f"out/calib_cam{n}.json", "w") as f:
+        with open(out_path(f"calib_cam{n}.json"), "w") as f:
             json.dump(result, f, indent=2)
         save_previews(source, result, n)
         for seg in result["segments"]:

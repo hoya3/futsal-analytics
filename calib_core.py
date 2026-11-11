@@ -1,4 +1,5 @@
 """화면(OpenCV 창) 없이 도는 캘리브레이션 공용 로직. GUI(calibrate.py)와 서버 처리가 함께 쓴다."""
+import os
 from dataclasses import asdict
 
 import cv2
@@ -9,8 +10,21 @@ from court import DEFAULT_SPEC, court_lines
 
 HALF_SIGN = {"east": 1, "west": -1}
 
+# 촬영 회차(경기)마다 카메라 배치가 달라 결과를 out/<회차>/에 따로 둔다. 회차 이름은 촬영 날짜(MMDD).
+ROOT = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MATCH = "1008"
 
-def click_landmarks(spec=DEFAULT_SPEC):
+
+def match_dir(match=None):
+    """회차의 결과 폴더. 회차는 인자 > 환경변수 FUTSAL_MATCH > DEFAULT_MATCH 순으로 정한다."""
+    return os.path.join(ROOT, "out", match or os.environ.get("FUTSAL_MATCH") or DEFAULT_MATCH)
+
+
+def out_path(name, match=None):
+    return os.path.join(match_dir(match), name)
+
+
+def click_landmarks(spec=DEFAULT_SPEC, mirror=False):
     """7클릭 랜드마크. 앞의 5점은 카메라 쪽 절반(H_near), 뒤의 2점(먼 쪽 코너)은 H_far에만 쓴다.
 
     동쪽 골대를 바라보는 카메라 기준 코트 좌표: x = 코트 길이 방향(카메라 쪽이 x<0), y = 화면의 왼쪽.
@@ -18,9 +32,10 @@ def click_landmarks(spec=DEFAULT_SPEC):
     풀이로 구하므로 표시가 없어도 된다. "line" 클릭의 xy는 초기 추정값일 뿐이다.
     가까운 하프 = 점 4개 + 사이드라인 점 1개 = 호모그래피에 필요한 제약 8개와 정확히 같다. (사이드라인 점을
     하나 더 추가해도 소용없다: 하프라인 오른쪽 끝이 이미 그 사이드라인 위에 있다.)
+    mirror=True: 보이는 사이드라인이 화면 왼쪽인 배치(1103 촬영). 이름의 좌우와 y 부호를 바꾼다.
     """
     L2, W2 = spec.length / 2, spec.width / 2
-    return [
+    lms = [
         {"name": "halfway line, left end", "kind": "point", "xy": (0.0, W2), "halves": ("near", "far")},
         {"name": "center circle x halfway line, right crossing", "kind": "point", "xy": (0.0, -spec.center_r), "halves": ("near",)},
         {"name": "halfway line, right end", "kind": "point", "xy": (0.0, -W2), "halves": ("near", "far")},
@@ -29,6 +44,12 @@ def click_landmarks(spec=DEFAULT_SPEC):
         {"name": "FAR left corner", "kind": "point", "xy": (L2, W2), "halves": ("far",)},
         {"name": "FAR right corner", "kind": "point", "xy": (L2, -W2), "halves": ("far",)},
     ]
+    if not mirror:
+        return lms
+    # 카메라가 반대쪽 모서리에 있어 보이는 사이드라인이 화면 왼쪽인 경우: 같은 순서로 찍되 좌우를 바꾼다 (코트 y 반전)
+    swap = {"left": "right", "right": "left"}
+    return [{**lm, "name": " ".join(swap.get(w.rstrip(","), w.rstrip(",")) + ("," if w.endswith(",") else "") for w in lm["name"].split()),
+             "xy": (lm["xy"][0], -lm["xy"][1])} for lm in lms]
 
 
 LANDMARKS = click_landmarks()
@@ -56,8 +77,8 @@ def solve_half(img_pts, lms, half, spec=DEFAULT_SPEC):
     def unpack(p):
         H = np.append(p[:8], 1.0).reshape(3, 3)
         world = guess.copy()
-        for k, i in enumerate(line_idx):  # 사이드라인 y = -W/2를 따라 이동 (동쪽 기준 좌표)
-            world[i] = to_world((p[8 + k], -spec.width / 2), half)
+        for k, i in enumerate(line_idx):  # 사이드라인(y = lm의 y, 보통 -W/2)을 따라 이동 (동쪽 기준 좌표)
+            world[i] = to_world((p[8 + k], lms[i]["xy"][1]), half)
         return H, world
 
     def residuals(p):
@@ -87,10 +108,10 @@ def manual_result(clicks, lms, half, spec=DEFAULT_SPEC):
     return {"near": near, "far": (H_far, far_world, far_err)}
 
 
-def manual_json(result, clicks, lms, half, spec=DEFAULT_SPEC, video=None, t=0.0):
-    """5클릭 결과의 저장 형식 (out/H_cam<N>.json, refine.py의 입력)."""
+def manual_json(result, clicks, lms, half, spec=DEFAULT_SPEC, video=None, t=0.0, mirror=False):
+    """7클릭 결과의 저장 형식 (out/<회차>/H_cam<N>.json, refine.py의 입력)."""
     return {
-        "half": half, "video": video, "t_sec": t, "spec": asdict(spec),
+        "half": half, "video": video, "t_sec": t, "spec": asdict(spec), "mirror": mirror,
         "names": [lm["name"] for lm in lms],
         "img_pts": [list(map(float, c)) for c in clicks],
         "world": {region: {str(i): list(map(float, p)) for i, p in result[region][1].items()} for region in ("near", "far")},

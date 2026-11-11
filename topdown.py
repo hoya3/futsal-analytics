@@ -12,7 +12,7 @@ import sys
 import cv2
 import numpy as np
 
-from calib_core import Source, front_facing, in_half
+from calib_core import Source, front_facing, in_half, out_path
 from court import court_lines, landmarks, spec_of
 from court_map import homographies_at, load
 
@@ -148,7 +148,7 @@ def draw_model_lines(canvas, geo):
 def main(args):
     cals = {n: load(n) for n in (1, 2)}
     if "--photo" not in args:
-        cv2.imwrite("out/topdown.jpg", render_court(spec_of(cals[1]))[0])
+        cv2.imwrite(out_path("topdown.jpg"), render_court(spec_of(cals[1]))[0])
         print("-> out/topdown.jpg")
         return
     for n, cal in cals.items():
@@ -158,7 +158,7 @@ def main(args):
     canvas, geo = build(cals, frames=frames)
     if "--lines" in args:
         draw_model_lines(canvas, geo)
-    cv2.imwrite("out/topdown_photo.jpg", canvas)
+    cv2.imwrite(out_path("topdown_photo.jpg"), canvas)
     print("-> out/topdown_photo.jpg")
 
 

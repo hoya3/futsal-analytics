@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 
 # images contain people from the match videos - keep only the calibration data (json/csv)
-out/*.jpg
+out/**/*.jpg
 out/sessions/
 *.mp4
 *.mov

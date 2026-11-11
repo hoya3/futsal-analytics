@@ -13,7 +13,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from auto_init import auto_calibrate, consensus, median_of  # noqa: E402
-from calib_core import Source, draw_lines, draw_overlay  # noqa: E402
+from calib_core import Source, draw_lines, draw_overlay, out_path  # noqa: E402
 from court import spec_of  # noqa: E402
 from court_map import load  # noqa: E402
 from eval_auto import error_m, truth_segment  # noqa: E402
@@ -61,7 +61,7 @@ def main(args):
         text = f"cam{n} t={t:.0f}  {r['status']}  conf={r['confidence']:.2f}  {err}"
         cv2.rectangle(view, (0, 0), (1100, 44), (0, 0, 0), -1)
         cv2.putText(view, text, (10, 31), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2)
-        path = f"out/auto_cam{n}_t{int(t)}.jpg"
+        path = out_path(f"auto_cam{n}_t{int(t)}.jpg")
         cv2.imwrite(path, view)
         print(f"{text.replace('  ', ' | ')} -> {path}", flush=True)
 

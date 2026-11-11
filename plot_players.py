@@ -18,6 +18,7 @@ import sys
 import cv2
 import numpy as np
 
+from calib_core import out_path
 from court import spec_of
 from court_map import load, pixel_to_court
 from topdown import Canvas
@@ -29,7 +30,7 @@ def to_canvas(xy, geo):
     return tuple(int(v) for v in geo.px([xy])[0])
 
 
-def main(path, t=None, bg="out/topdown.jpg"):
+def main(path, t=None, bg=out_path("topdown.jpg")):
     rows = list(csv.DictReader(open(path)))
     if t is not None:
         rows = [r for r in rows if abs(float(r["t"]) - t) < 0.1]
@@ -56,8 +57,8 @@ def main(path, t=None, bg="out/topdown.jpg"):
             cv2.circle(canvas, c, 9, color, -1)
             cv2.circle(canvas, c, 9, (0, 0, 0), 1)
             cv2.putText(canvas, f"{r['id']}", (c[0] + 11, c[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    cv2.imwrite("out/players.jpg", canvas)
-    with open("out/players_court.csv", "w", newline="") as f:
+    cv2.imwrite(out_path("players.jpg"), canvas)
+    with open(out_path("players_court.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
@@ -66,4 +67,4 @@ def main(path, t=None, bg="out/topdown.jpg"):
 
 if __name__ == "__main__":
     a = sys.argv
-    main(a[1], float(a[a.index("--t") + 1]) if "--t" in a else None, a[a.index("--bg") + 1] if "--bg" in a else "out/topdown.jpg")
+    main(a[1], float(a[a.index("--t") + 1]) if "--t" in a else None, a[a.index("--bg") + 1] if "--bg" in a else out_path("topdown.jpg"))

@@ -11,10 +11,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eval"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train"))
 
-from calib_core import click_landmarks, front_facing, solve_half  # noqa: E402
+from calib_core import ROOT, click_landmarks, front_facing, match_dir, solve_half  # noqa: E402
 from court import CourtSpec, court_lines, landmarks  # noqa: E402
 from court_map import load, load_source, pixel_to_court, to_sync_time  # noqa: E402
-from refine import project  # noqa: E402
+from refine import project, sample_model  # noqa: E402
 from track import Sample, TrackConfig, group_samples, track_camera, translation  # noqa: E402
 
 # 실제 cam1 캘리브레이션 값 (이미지 -> 코트, 동쪽을 바라봄)
@@ -494,10 +494,12 @@ def test_unreliable_cam2_far_keypoints_are_not_labeled():
     import make_dataset as md
 
     names = [n for n, _ in md.keypoints()]
-    far = [names.index(n) for n in md.UNRELIABLE[2]]
+    far = [names.index(n) for n in md.UNRELIABLE["1008"][2]]
     assert (md.project_keypoints(seg_of(H_NEAR), "east", 1)[far, 2] > 0).any()
     cam2 = md.project_keypoints(seg_of(H_NEAR), "east", 2)
     assert (cam2[far, 2] == 0).all() and (cam2[names.index("far_10m"), 2] > 0)
+    other = md.project_keypoints(seg_of(H_NEAR), "east", 2, match="1103")  # 회차마다 따로 정한다
+    assert (other[far, 2] > 0).any()
 
 
 def test_yolo_line_format_and_too_few_points():
@@ -746,3 +748,105 @@ def test_service_uses_keypoint_model_only_when_weights_exist(monkeypatch, tmp_pa
     monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(weights))
     svc.find_court(None, "east", CourtSpec())
     assert called == ["pose_grid", "keypoint"]
+
+
+def test_match_dir_picks_match_from_arg_env_default(monkeypatch):
+    monkeypatch.delenv("FUTSAL_MATCH", raising=False)
+    assert match_dir() == os.path.join(ROOT, "out", "1008")
+    monkeypatch.setenv("FUTSAL_MATCH", "1103")
+    assert match_dir() == os.path.join(ROOT, "out", "1103")
+    assert match_dir("0901") == os.path.join(ROOT, "out", "0901")
+
+
+def test_load_reads_the_selected_match(tmp_path, monkeypatch):
+    import calib_core
+    for match, video in (("1008", "a.mp4"), ("1103", "b.mp4")):
+        os.makedirs(tmp_path / "out" / match)
+        with open(tmp_path / "out" / match / "H_cam1.json", "w") as f:
+            json.dump({"half": "east", "video": video}, f)
+    monkeypatch.setattr(calib_core, "ROOT", str(tmp_path))
+    monkeypatch.delenv("FUTSAL_MATCH", raising=False)
+    assert load(1)["video"] == "a.mp4"
+    monkeypatch.setenv("FUTSAL_MATCH", "1103")
+    assert load(1)["video"] == "b.mp4"
+
+
+def test_mirrored_clicks_recover_camera_on_the_other_corner():
+    """1103 배치: 카메라가 반대쪽 모서리라 화면이 1008의 좌우 반전. f 모드 클릭으로 같은 코트를 풀어야 한다."""
+    from calib_core import manual_result
+    F = np.array([[-1.0, 0, 1919], [0, 1, 0], [0, 0, 1]])
+    M = np.diag([1.0, -1.0, 1.0])
+    H_true = M @ H_NEAR @ F  # 반전된 화면의 이미지 -> 코트 (보이는 사이드라인 y = +10)
+    G_m = front_facing(np.linalg.inv(H_true))
+    lms = click_landmarks(mirror=True)
+    world = np.array([lm["xy"] for lm in lms], float)
+    world[3, 0] = -13.0  # 사이드라인 위 아무 점
+    clicks = project(G_m, world)[0]
+    assert clicks[3, 0] < 960  # 보이는 사이드라인은 화면 왼쪽
+    res = manual_result(clicks.tolist(), lms, "east")
+    probe = np.array([[-15.0, 8.0], [-5.0, -6.0], [0.0, 0.0]])
+    px = project(G_m, probe)[0]
+    assert np.allclose(cv2.perspectiveTransform(px[None], res["near"][0])[0], probe, atol=1e-3)
+    assert np.allclose(res["near"][1][3], [-13.0, 10.0], atol=1e-3)
+
+
+def test_mirror_swaps_names_and_sides_only():
+    a, b = click_landmarks(), click_landmarks(mirror=True)
+    assert [x["kind"] for x in a] == [x["kind"] for x in b]
+    assert b[0]["name"] == "halfway line, right end" and b[3]["name"].startswith("left sideline")
+    assert all(x["xy"] == (y["xy"][0], -y["xy"][1]) for x, y in zip(b, a))
+
+
+def test_keypoint_init_solves_mirrored_camera_through_flipped_frame(monkeypatch):
+    """반대쪽 모서리 카메라(1103): 반전 프레임은 1008 화면처럼 보이므로 모델은 반전 프레임에서 지점을 찾는다."""
+    import keypoint_init as ki
+
+    F = np.array([[-1.0, 0, 1919], [0, 1, 0], [0, 0, 1]])
+    G_m = front_facing(np.linalg.inv(np.diag([1.0, -1.0, 1.0]) @ H_NEAR @ F))
+    # 가짜 모델은 어떤 프레임이든 1008 배치(G)의 지점을 낸다 = 반전 프레임에서만 맞는 답
+    monkeypatch.setattr(ki, "detect", fake_detect({"halfway_left", "halfway_right", "circle_halfway_left",
+                                                   "circle_halfway_right", "near_10m", "far_10m"}))
+    r = ki.keypoint_calibrate(render(G_m), "east")
+    assert r["status"] == "ok" and r["flipped"] and r["confidence"] >= ki.ACCEPT_SCORE
+    world = np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0]])
+    px, _ = project(G_m, world)
+    assert np.linalg.norm(pixel_to_court({"half": "east", **r}, px) - world, axis=1).max() < 0.2
+    assert not ki.keypoint_calibrate(render(G), "east")["flipped"]  # 1008 배치는 그대로
+
+
+def _scene(seed=3, sky=1080):
+    """무늬가 있는 배경(위쪽 sky 줄). 그 아래는 선 없는 잔디."""
+    rng = np.random.default_rng(seed)
+    base = cv2.GaussianBlur(rng.integers(0, 255, (1080, 1920)).astype(np.uint8), (0, 0), 2)
+    img = cv2.cvtColor(base, cv2.COLOR_GRAY2BGR)
+    img[sky:] = (60, 130, 50)
+    return img
+
+
+def test_background_shift_measures_camera_translation_and_refuses_zoom():
+    import track as tr
+
+    img = _scene()
+    moved = cv2.warpAffine(img, np.float32([[1, 0, 7], [0, 1, -5]]), (1920, 1080), borderMode=cv2.BORDER_REFLECT)
+    d = tr.background_shift(tr.describe(img), tr.describe(moved))
+    assert d is not None and abs(d[0] - 7) < 0.5 and abs(d[1] + 5) < 0.5
+    zoom = cv2.warpAffine(img, cv2.getRotationMatrix2D((960, 540), 0, 1.1), (1920, 1080), borderMode=cv2.BORDER_REFLECT)
+    assert tr.background_shift(tr.describe(img), tr.describe(zoom)) is None
+    assert tr.background_shift(tr.describe(img), None) is None
+
+
+def test_walk_keeps_feature_confirmed_position_when_lines_fade(monkeypatch):
+    """배경으로 카메라가 그대로임이 확인되면, 흰 선이 흐린 프레임(야간 조명)도 잃지 않고 같은 자리로 둔다."""
+    import track as tr
+
+    class Faded:
+        duration = 30.0
+
+        def frame_at(self, t):
+            return _scene(sky=200)  # 펜스 너머 배경은 그대로, 코트에는 흰 선이 없음
+
+    pts = sample_model(CourtSpec())
+    s = tr.walk(Faded(), [5.0, 10.0], G, pts, (0.0, 0.0), CFG, 0.4, lambda *_: None, start_frame=_scene(sky=200))
+    assert all(x.ok and x.by == "features" and abs(x.dx) < 0.5 and abs(x.dy) < 0.5 for x in s)
+    no_feat = tr.walk(Faded(), [5.0], G, pts, (0.0, 0.0), TrackConfig(use_features=False), 0.4, lambda *_: None, start_frame=_scene(sky=200))
+    assert not no_feat[0].ok or abs(no_feat[0].dx) + abs(no_feat[0].dy) > 10  # 흰 선만으로는 엉뚱한 곳에 맞추거나 놓친다

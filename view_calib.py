@@ -11,7 +11,7 @@ import time
 import cv2
 import numpy as np
 
-from calib_core import draw_overlay
+from calib_core import draw_overlay, out_path
 from court import spec_of
 from court_map import homographies_at, load
 from topdown import main as build_clean_map
@@ -129,11 +129,11 @@ def main():
     if a.play:
         play(view, a.start)
     elif a.end is not None:
-        path = f"out/view_{a.start:g}_{a.end:g}.mp4"
+        path = out_path(f"view_{a.start:g}_{a.end:g}.mp4")
         save_clip(view, a.start, a.end, a.step, path)
         print("->", path)
     else:
-        path = f"out/view_t{a.t:g}.jpg"
+        path = out_path(f"view_t{a.t:g}.jpg")
         cv2.imwrite(path, view.compose(a.t))
         print("->", path)
 

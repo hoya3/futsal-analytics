@@ -7,15 +7,16 @@
           먼 쪽 코너 2점으로 시작하고, refine.py가 하프라인 위의 모든 점은 H_near가 놓은 자리에 고정한 채
           코너와 흰 선에 맞추므로, 두 호모그래피가 하프라인 전체에서 일치한다.
 
-사용법: python calibrate.py camera1.mp4 camera2.mp4 [--auto] [--court 38x18]  (이미지도 가능; "-"는 해당 카메라 건너뜀, 예: - camera2.mp4)
+사용법: python calibrate.py camera1.mp4 camera2.mp4 [--auto] [--mirror] [--court 38x18]  (이미지도 가능; "-"는 해당 카메라 건너뜀, 예: - camera2.mp4)
   --auto: 자동 인식 후보를 먼저 보여 준다 (y = 승인, n 또는 실패 = 5클릭).
   t=60 s에서 시작(영상 처음 ~30 s 동안 폰이 움직였음). 랜드마크를 아무도 가리지 않는 프레임을 고른다:
   a/d = -/+ 10 s, z/c = -/+ 1 s (첫 클릭 전에만).
   좌/우는 화면에 보이는 기준. 미니맵(왼쪽 아래)에 다음 점이 빨간색으로 표시된다.
   "half" = 카메라가 바라보는 골대: cam1은 동쪽 골대(x=+20), cam2는 서쪽 골대(x=-20); h로 뒤집는다.
-키: 왼쪽 클릭 = 빨간 점 찍기, u = 되돌리기, h = 방향 뒤집기(첫 클릭 전), m = 도움말 숨기기/보이기,
+  보이는 사이드라인이 화면 왼쪽이면(카메라가 반대쪽 모서리, 1103 촬영) f로 좌우를 바꾼다: 미니맵과 점 이름이 바뀐다.
+키: 왼쪽 클릭 = 빨간 점 찍기, u = 되돌리기, h = 방향 뒤집기(첫 클릭 전), f = 좌우 반전(첫 클릭 전), m = 도움말 숨기기/보이기,
     Enter = 확정, q = 종료.
-카메라별 출력: out/H_cam<N>.json, out/frame_cam<N>.jpg, out/H_cam<N>_overlay.jpg. 그다음 refine.py를 실행한다.
+카메라별 출력: out/<회차>/H_cam<N>.json, frame_cam<N>.jpg, H_cam<N>_overlay.jpg (회차 = 환경변수 FUTSAL_MATCH, 기본 1008). 그다음 refine.py를 실행한다.
 """
 import json
 import os
@@ -26,7 +27,7 @@ import cv2
 import numpy as np
 
 from auto_init import auto_calibrate_video, median_of
-from calib_core import Source, click_landmarks, draw_overlay, manual_json, manual_result
+from calib_core import Source, click_landmarks, draw_overlay, manual_json, manual_result, match_dir, out_path
 from court import DEFAULT_SPEC, CourtSpec, court_lines
 
 
@@ -35,6 +36,7 @@ class Calibrator:
         self.frame = frame
         self.half = half
         self.spec = spec
+        self.mirror = False
         self.lms = click_landmarks(spec)
         self.t = 0.0
         self.show_map = True
@@ -65,6 +67,12 @@ class Calibrator:
         if not self.clicks:
             self.half = "west" if self.half == "east" else "east"
 
+    def toggle_mirror(self):
+        """보이는 사이드라인이 화면 왼쪽인 배치용: 클릭 순서의 좌우를 바꾼다 (첫 클릭 전)."""
+        if not self.clicks:
+            self.mirror = not self.mirror
+            self.lms = click_landmarks(self.spec, self.mirror)
+
     def _minimap(self, view):
         x0, w, h = 20, 120, 240  # 카메라가 보는 방향의 코트 전체: 먼 골대가 위, 카메라 쪽 골대가 아래
         L, W = self.spec.length, self.spec.width
@@ -87,7 +95,8 @@ class Calibrator:
             msg = "Enter: accept   u: undo"
         else:
             msg = f"click {i_next + 1}/{len(self.lms)}: {self.lms[i_next]['name']}"
-        cv2.putText(view, f"facing the {self.half} goal", (tx, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        side = "LEFT (mirrored, f)" if self.mirror else "right (f: mirror)"
+        cv2.putText(view, f"facing the {self.half} goal   near sideline: {side}", (tx, y0 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(view, msg, (tx, y0 + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         if not self.done and self.lms[i_next]["kind"] == "line":
             cv2.putText(view, "(anywhere ON the line - no marking needed)", (tx, y0 + 85), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
@@ -124,7 +133,7 @@ class Calibrator:
         view[200:200 + big.shape[0], bx:bx + big.shape[1]] = big
 
     def to_json(self, video=None):
-        return manual_json(self.result, self.clicks, self.lms, self.half, self.spec, video, self.t)
+        return manual_json(self.result, self.clicks, self.lms, self.half, self.spec, video, self.t, self.mirror)
 
     def save(self, out_json, video=None):
         cv2.imwrite(out_json.replace("H_", "frame_").replace(".json", ".jpg"), self.frame)
@@ -156,20 +165,22 @@ def review_auto(n, path, half, spec):
         return False
     d = {"half": half, "video": path, "t_sec": r["t_sec"], "spec": asdict(spec), "source": "auto",
          "H_near": r["H_near"], "H_far": r["H_far"]}
-    os.makedirs("out", exist_ok=True)
-    cv2.imwrite(f"out/frame_cam{n}.jpg", frame)
-    cv2.imwrite(f"out/H_cam{n}_overlay.jpg", view)
-    for name in (f"out/H_cam{n}.json", f"out/H_cam{n}_refined.json"):  # 자동 후보는 이미 흰 선에 맞춰져 있다
+    os.makedirs(match_dir(), exist_ok=True)
+    cv2.imwrite(out_path(f"frame_cam{n}.jpg"), frame)
+    cv2.imwrite(out_path(f"H_cam{n}_overlay.jpg"), view)
+    for name in (out_path(f"H_cam{n}.json"), out_path(f"H_cam{n}_refined.json")):  # 자동 후보는 이미 흰 선에 맞춰져 있다
         with open(name, "w") as f:
             json.dump(d, f, indent=2)
     print(f"cam{n}: 자동 후보 승인 -> out/H_cam{n}_refined.json")
     return True
 
 
-def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC):  # 처음 ~30 s 동안은 두 폰 모두 아직 조정 중이었음
+def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC, mirror=False):  # 처음 ~30 s 동안은 두 폰 모두 아직 조정 중이었음
     src = Source(path)
     cal = Calibrator(src.frame_at(t), half, spec)
     cal.t = t
+    if mirror:
+        cal.toggle_mirror()
     win = f"cam{n} - {os.path.basename(path)}"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win, 1280, 720)
@@ -193,14 +204,16 @@ def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC):  # 처음 ~30 s 동안
             cal.undo()
         elif key == ord("h"):
             cal.flip()
+        elif key == ord("f"):
+            cal.toggle_mirror()
         elif key == ord("m"):
             cal.show_map = not cal.show_map
         elif key == ord("q"):
             cv2.destroyWindow(win)
             return False
         elif key == 13 and cal.result:
-            os.makedirs("out", exist_ok=True)
-            cal.save(f"out/H_cam{n}.json", video=path)
+            os.makedirs(match_dir(), exist_ok=True)
+            cal.save(out_path(f"H_cam{n}.json"), video=path)
             print(f"cam{n}: facing {cal.half}, t={cal.t:.0f}s -> out/H_cam{n}.json")
             cv2.destroyWindow(win)
             return True
@@ -213,6 +226,9 @@ if __name__ == "__main__":
         i = args.index("--court")
         spec = CourtSpec(*map(float, args[i + 1].lower().split("x")))
         del args[i:i + 2]
+    mirror = "--mirror" in args  # 보이는 사이드라인이 화면 왼쪽인 배치(1103)로 시작 (창에서 f와 같음)
+    if mirror:
+        args.remove("--mirror")
     use_auto = "--auto" in args  # 자동 후보를 먼저 보여 주고 y/n으로 고른다
     if use_auto:
         args.remove("--auto")
@@ -221,5 +237,5 @@ if __name__ == "__main__":
             continue
         if use_auto and review_auto(n, path, half, spec):
             continue
-        if not run_camera(n, path, half, spec=spec):
+        if not run_camera(n, path, half, spec=spec, mirror=mirror):
             break

@@ -1,7 +1,7 @@
-"""사람이 찍은 검증 점(eval/labels.json)으로 호모그래피 정확도를 미터로 잰다.
+"""사람이 찍은 검증 점(out/<회차>/labels.json)으로 호모그래피 정확도를 미터로 잰다.
 
 지점(point)은 코트 좌표와의 거리, 선(line)은 해당 코트 선까지의 거리로 채점한다.
-사용법: python eval/score_points.py [--out-dir out] [--labels eval/labels.json]
+사용법: [FUTSAL_MATCH=1103] python eval/score_points.py [--out-dir out/1008] [--labels out/1008/labels.json]
 """
 import argparse
 import os
@@ -56,7 +56,7 @@ def summarize(rows):
 
 def main():
     p = argparse.ArgumentParser(description="검증 점 채점")
-    p.add_argument("--out-dir", default="out")
+    p.add_argument("--out-dir", default=None, help="기본: 현재 회차 폴더 out/<FUTSAL_MATCH>")
     p.add_argument("--labels", default=LABELS_PATH)
     a = p.parse_args()
     labels = read_labels(a.labels)

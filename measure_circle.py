@@ -5,6 +5,7 @@ import sys
 import cv2
 import numpy as np
 
+from calib_core import out_path
 from refine import ridge_map, project, front_facing
 
 
@@ -17,10 +18,10 @@ def fit_circle(p):
 
 for n in (1, 2):
     suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
-    d = json.load(open(f"out/H_cam{n}{suffix}.json"))
+    d = json.load(open(out_path(f"H_cam{n}{suffix}.json")))
     H = np.array(d["H_near"])  # 서클이 하프라인에 걸쳐 있고, 두 호모그래피가 하프라인을 공유한다
     Hc2i = front_facing(np.linalg.inv(H))
-    ridge = cv2.GaussianBlur(ridge_map(cv2.imread(f"out/frame_cam{n}.jpg")), (0, 0), 1.5)
+    ridge = cv2.GaussianBlur(ridge_map(cv2.imread(out_path(f"frame_cam{n}.jpg"))), (0, 0), 1.5)
     pts = []
     for th in np.radians(np.arange(0, 360, 3)):
         rs = np.linspace(1.8, 4.2, 97)  # 가정한 3 m 원 주변의 탐색 반지름 (m)

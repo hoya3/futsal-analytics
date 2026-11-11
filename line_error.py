@@ -10,15 +10,15 @@ import sys
 import cv2
 import numpy as np
 
-from calib_core import front_facing, in_half
+from calib_core import front_facing, in_half, out_path
 from court import spec_of
 from refine import match_lines, ridge_map, sample_model
 
 suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
 for n in (1, 2):
-    d = json.load(open(f"out/H_cam{n}{suffix}.json"))
+    d = json.load(open(out_path(f"H_cam{n}{suffix}.json")))
     model = sample_model(spec_of(d))
-    ridge = cv2.GaussianBlur(ridge_map(cv2.imread(f"out/frame_cam{n}.jpg")), (0, 0), 1)
+    ridge = cv2.GaussianBlur(ridge_map(cv2.imread(out_path(f"frame_cam{n}.jpg"))), (0, 0), 1)
     parts = []
     for region in ("near", "far"):
         H = np.array(d[f"H_{region}"])

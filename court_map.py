@@ -16,18 +16,20 @@ import os
 import cv2
 import numpy as np
 
-from calib_core import HALF_SIGN
+from calib_core import HALF_SIGN, match_dir
 
 
-def load_anchor(n, out_dir="out"):
-    """카메라 n의 단일 프레임 캘리브레이션 (보정본이 있으면 그것을 사용)."""
+def load_anchor(n, out_dir=None):
+    """카메라 n의 단일 프레임 캘리브레이션 (보정본이 있으면 그것을 사용). out_dir 기본값은 현재 회차 폴더(calib_core.match_dir)."""
+    out_dir = out_dir or match_dir()
     refined = os.path.join(out_dir, f"H_cam{n}_refined.json")
     with open(refined if os.path.exists(refined) else os.path.join(out_dir, f"H_cam{n}.json")) as f:
         return json.load(f)
 
 
-def load_source(n, out_dir="out"):
+def load_source(n, out_dir=None):
     """카메라 n의 캘리브레이션, 원본 영상 시각 기준. 시간별 결과(calib_cam<n>.json)가 있으면 그것을 우선 사용."""
+    out_dir = out_dir or match_dir()
     tracked = os.path.join(out_dir, f"calib_cam{n}.json")
     if os.path.exists(tracked):
         with open(tracked) as f:
@@ -35,9 +37,10 @@ def load_source(n, out_dir="out"):
     return load_anchor(n, out_dir)
 
 
-def load(n, out_dir="out"):
-    """카메라 n의 캘리브레이션, 동기화 영상(out/sync.json) 시각 기준. 팀 파이프라인은 이 함수를 쓴다.
-    sync.json이 없거나 시간별 결과가 아니면 load_source와 같다."""
+def load(n, out_dir=None):
+    """카메라 n의 캘리브레이션, 동기화 영상(out/<회차>/sync.json) 시각 기준. 팀 파이프라인은 이 함수를 쓴다.
+    sync.json이 없거나 시간별 결과가 아니면 load_source와 같다. 회차는 환경변수 FUTSAL_MATCH (기본 1008)."""
+    out_dir = out_dir or match_dir()
     cal = load_source(n, out_dir)
     sync_path = os.path.join(out_dir, "sync.json")
     if "segments" not in cal or not os.path.exists(sync_path):
