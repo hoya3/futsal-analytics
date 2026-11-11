@@ -79,7 +79,9 @@ def test_spec_scales_court_lines_and_landmarks():
 
 def test_default_court_is_unchanged():
     lms = click_landmarks()
-    assert [lm["xy"] for lm in lms] == [(0.0, 10.0), (0.0, -3.0), (0.0, -10.0), (-14.0, -10.0), (-10.0, 0.0), (20.0, 10.0), (20.0, -10.0)]
+    assert [lm["xy"] for lm in lms[:7]] == [(0.0, 10.0), (0.0, -3.0), (0.0, -10.0), (-14.0, -10.0), (-10.0, 0.0), (20.0, 10.0), (20.0, -10.0)]
+    assert not any(lm.get("optional") for lm in lms[:7])  # 기존 7클릭 파일과 순서가 같다
+    assert [lm["xy"] for lm in lms[7:]] == [(-14.0, 0.0), (-18.0, -10.0)] and all(lm["optional"] for lm in lms[7:])
 
 
 def test_solve_half_recovers_synthetic_homography():
@@ -909,3 +911,50 @@ def test_harness_median_ci_and_split_guard(tmp_path):
     log = tmp_path / "log.jsonl"
     rec = hz.log_usage("1008", "val", [str(log)], {"labels_n": 3}, path=str(log))
     assert json.loads(log.read_text().splitlines()[-1])["purpose"] == "val" and rec["labels_n"] == 3
+
+
+def _true_clicks(G_cam, lms):
+    world = np.array([lm["xy"] for lm in lms], float)
+    world[3, 0], world[8, 0] = -13.0, -18.0  # 선 클릭은 선 위 아무 곳
+    return project(G_cam, world)[0]
+
+
+def test_check_clicks_reveal_a_misclicked_10m_spot():
+    """10 m 지점은 7클릭만으로는 틀려도 잔차가 0이다. 확인 클릭 2개를 더하면 5 px 오클릭이 드러난다."""
+    from calib_core import MISCLICK_PX, click_residuals_px, manual_result
+
+    lms = click_landmarks()
+    clicks = _true_clicks(G, lms)
+    clean = manual_result(clicks.tolist(), lms, "east")
+    assert max(click_residuals_px(clean, clicks.tolist(), lms).values()) < 0.1
+    bad = clicks.copy()
+    bad[4] += (0, 5)  # 10 m 지점을 5 px 아래에
+    seven = manual_result(bad[:7].tolist(), lms, "east")
+    assert max(click_residuals_px(seven, bad[:7].tolist(), lms).values()) < 0.1  # 7클릭: 드러나지 않음
+    nine = manual_result(bad.tolist(), lms, "east")
+    assert max(click_residuals_px(nine, bad.tolist(), lms).values()) > MISCLICK_PX
+
+
+def test_calibrator_skips_optional_checks_and_flags_misclicks():
+    from calibrate import Calibrator
+
+    cal = Calibrator(render(G), "east")
+    clicks = _true_clicks(G, cal.lms)
+    for x, y in clicks[:7]:
+        cal.click(x, y)
+    assert cal.ready and cal.result is not None and not cal.done and not cal.suspicious
+    cal.skip()
+    cal.skip()
+    assert cal.done and cal.clicks[7:] == [None, None]
+    d = cal.to_json("v.mp4")
+    assert d["img_pts"][7] is None and "7" not in d["world"]["near"]
+    cal.undo(); cal.undo()
+    cal.clicks[4] = (clicks[4][0], clicks[4][1] + 6)
+    cal.click(*clicks[7]); cal.click(*clicks[8])
+    assert cal.suspicious  # 10 m 지점 오클릭이 확인 클릭으로 드러남
+    cal.render()
+    for _ in range(9):
+        cal.undo()
+    cal.click(*clicks[0])
+    cal.skip()  # 필수 클릭은 건너뛸 수 없다
+    assert len(cal.clicks) == 1

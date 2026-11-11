@@ -24,7 +24,8 @@ import cv2
 import numpy as np
 
 from auto_init import ROT180, AutoConfig, auto_calibrate_video, camera_from, median_of, plausible
-from calib_core import Source, click_landmarks, draw_overlay, front_facing, in_half, manual_json, manual_result
+from calib_core import (MISCLICK_PX, REQUIRED_CLICKS, Source, click_landmarks, click_residuals_px, draw_overlay, front_facing,
+                        in_half, manual_json, manual_result)
 from court import DEFAULT_SPEC, CourtSpec, spec_of
 from refine import CIRCLE_PAD, far_anchors, project, refine_camera, sample_model
 from track import TrackConfig, line_score, to_ridge, track_camera
@@ -176,16 +177,23 @@ def _solve_manual(frame_img, clicks, half, spec, video, t):
     """클릭 -> 정밀화 -> 품질 검사. (캘리브레이션 dict, 일치율, 경고 목록)을 돌려준다."""
     lms = click_landmarks(spec)
     h, w = frame_img.shape[:2]
-    if len(clicks) != len(lms):
-        raise SessionError(f"클릭은 {len(lms)}개여야 합니다 (받은 개수: {len(clicks)})")
-    if any(not (0 <= x < w and 0 <= y < h) for x, y in clicks):
+    if not REQUIRED_CLICKS <= len(clicks) <= len(lms):
+        raise SessionError(f"클릭은 {REQUIRED_CLICKS}~{len(lms)}개여야 합니다 (받은 개수: {len(clicks)}). 확인 클릭은 건너뛰면 null")
+    if any(c is None and not lm.get("optional") for c, lm in zip(clicks, lms)):
+        raise SessionError(f"앞의 {REQUIRED_CLICKS}개 클릭은 건너뛸 수 없습니다")
+    if any(c is not None and not (0 <= c[0] < w and 0 <= c[1] < h) for c in clicks):
         raise SessionError("화면 밖의 클릭이 있습니다")
     try:
-        d = manual_json(manual_result(clicks, lms, half, spec), clicks, lms, half, spec, video, t)
+        result = manual_result(clicks, lms, half, spec)
+        d = manual_json(result, clicks, lms, half, spec, video, t)
     except (cv2.error, np.linalg.LinAlgError, ValueError) as e:
         raise SessionError(f"클릭으로 코트를 계산할 수 없습니다. 점의 순서와 위치를 확인해 주세요. ({e})") from e
 
     warnings = []
+    bad = {i: r for i, r in click_residuals_px(result, clicks, lms).items() if r > MISCLICK_PX}
+    if bad:
+        warnings.append("다른 점들과 맞지 않는 클릭이 있습니다: " + ", ".join(f"{i + 1}번 {r:.1f} px" for i, r in sorted(bad.items()))
+                        + ". 그 점을 다시 찍어 주세요.")
     try:
         d = refine_camera(d, frame_img, log=lambda *_: None)
     except (cv2.error, np.linalg.LinAlgError):

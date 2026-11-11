@@ -33,6 +33,10 @@ def click_landmarks(spec=DEFAULT_SPEC, mirror=False):
     가까운 하프 = 점 4개 + 사이드라인 점 1개 = 호모그래피에 필요한 제약 8개와 정확히 같다. (사이드라인 점을
     하나 더 추가해도 소용없다: 하프라인 오른쪽 끝이 이미 그 사이드라인 위에 있다.)
     mirror=True: 보이는 사이드라인이 화면 왼쪽인 배치(1103 촬영). 이름의 좌우와 y 부호를 바꾼다.
+
+    8, 9번은 선택 확인 클릭(optional, 기본은 7클릭 후 바로 확정): 가까운 하프에 여분 제약 3개를 더해, 그것 없이는 잔차가
+    0이라 틀려도 드러나지 않는 10 m 지점 오클릭을 재투영 잔차로 잡는다(eval/click_sensitivity.py). 화면에 없으면 건너뛴다(None).
+    기존 7클릭 파일과 순서가 같도록 뒤에 붙인다.
     """
     L2, W2 = spec.length / 2, spec.width / 2
     lms = [
@@ -43,6 +47,10 @@ def click_landmarks(spec=DEFAULT_SPEC, mirror=False):
         {"name": "10 m spot (small white dot)", "kind": "point", "xy": (-(L2 - 10.0), 0.0), "halves": ("near",)},
         {"name": "FAR left corner", "kind": "point", "xy": (L2, W2), "halves": ("far",)},
         {"name": "FAR right corner", "kind": "point", "xy": (L2, -W2), "halves": ("far",)},
+        {"name": "CHECK penalty arc front (middle of the near arc)", "kind": "point", "xy": (-(L2 - spec.penalty_r), 0.0),
+         "halves": ("near",), "optional": True},
+        {"name": "CHECK right sideline: a second point, far from click 4", "kind": "line", "xy": (-0.9 * L2, -W2),
+         "halves": ("near",), "optional": True},
     ]
     if not mirror:
         return lms
@@ -53,6 +61,10 @@ def click_landmarks(spec=DEFAULT_SPEC, mirror=False):
 
 
 LANDMARKS = click_landmarks()
+REQUIRED_CLICKS = sum(not lm.get("optional") for lm in LANDMARKS)  # 7
+# 클릭 재투영 잔차가 이보다 크면 다시 찍기 권고. 1103(학습 회차) 측정: 정상 클릭(sigma 1 px)의 잔차 최대는 중앙값 2.3 px,
+# 95% 4.9 px라 3 px면 오경보 31%. 5 px 오클릭은 하프라인 점 4.5~11.6 px, 10 m 지점(확인 클릭 있을 때) 6~9.5 px.
+MISCLICK_PX = 5.0
 
 
 def to_world(xy, half):
@@ -92,16 +104,26 @@ def solve_half(img_pts, lms, half, spec=DEFAULT_SPEC):
     return H, world, err
 
 
+def _padded(clicks, lms):
+    """건너뛴 선택 클릭은 None. 클릭이 lms보다 짧으면(기존 7클릭) 나머지를 None으로 채운다."""
+    out = list(clicks) + [None] * (len(lms) - len(clicks))
+    missing = [lm["name"] for c, lm in zip(out, lms) if c is None and not lm.get("optional")]
+    if missing:
+        raise ValueError(f"필수 클릭이 빠졌습니다: {missing}")
+    return out
+
+
 def manual_result(clicks, lms, half, spec=DEFAULT_SPEC):
     """클릭의 호모그래피. {"near": (H, 월드 좌표, 오차), "far": ...}.
-    near는 카메라 쪽 점만으로 풀고, far는 하프라인을 near와 공유한 채 먼 쪽 코너에 맞춘다."""
-    near_idx = [i for i, lm in enumerate(lms) if "near" in lm["halves"]]
+    near는 카메라 쪽 점만으로 풀고, far는 하프라인을 near와 공유한 채 먼 쪽 코너에 맞춘다. 건너뛴 선택 클릭(None)은 뺀다."""
+    clicks = _padded(clicks, lms)
+    near_idx = [i for i, lm in enumerate(lms) if "near" in lm["halves"] and clicks[i] is not None]
     H, world, err = solve_half([clicks[i] for i in near_idx], [lms[i] for i in near_idx], half, spec)
     near = (H, dict(zip(near_idx, world)), dict(zip(near_idx, err)))
     far_world, far_err = {}, {}
-    beyond = [i for i, lm in enumerate(lms) if "near" not in lm["halves"]]  # 하프라인 너머의 점
+    beyond = [i for i, lm in enumerate(lms) if "near" not in lm["halves"] and clicks[i] is not None]  # 하프라인 너머의 점
     for i, lm in enumerate(lms):
-        if "far" in lm["halves"]:
+        if "far" in lm["halves"] and clicks[i] is not None:
             far_world[i] = near[1][i] if i in near[1] else np.array(to_world(lm["xy"], half), float)
             far_err[i] = near[2].get(i, 0.0)
     H_far = far_from_anchors(H, [far_world[i] for i in beyond], [clicks[i] for i in beyond])
@@ -113,7 +135,7 @@ def manual_json(result, clicks, lms, half, spec=DEFAULT_SPEC, video=None, t=0.0,
     return {
         "half": half, "video": video, "t_sec": t, "spec": asdict(spec), "mirror": mirror,
         "names": [lm["name"] for lm in lms],
-        "img_pts": [list(map(float, c)) for c in clicks],
+        "img_pts": [None if c is None else list(map(float, c)) for c in _padded(clicks, lms)],
         "world": {region: {str(i): list(map(float, p)) for i, p in result[region][1].items()} for region in ("near", "far")},
         "H_near": result["near"][0].tolist(),
         "H_far": result["far"][0].tolist(),
@@ -183,3 +205,17 @@ class Source:
         self.cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
         ok, frame = self.cap.read()
         return frame if ok else None
+
+
+def click_residuals_px(result, clicks, lms):
+    """클릭마다 풀이 행렬로 다시 투영한 위치와의 거리 (px). 선 클릭은 풀이가 선 위로 옮긴 위치 기준(선에 수직인 차이)."""
+    clicks = _padded(clicks, lms)
+    out = {}
+    for region in ("near", "far"):
+        G = front_facing(np.linalg.inv(np.asarray(result[region][0], float)))
+        for i, w in result[region][1].items():
+            if i in out or clicks[i] is None or (region == "far" and i in result["near"][1]):
+                continue
+            q = G @ np.array([w[0], w[1], 1.0])
+            out[i] = float(np.hypot(q[0] / q[2] - clicks[i][0], q[1] / q[2] - clicks[i][1]))
+    return out

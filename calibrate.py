@@ -14,7 +14,9 @@
   좌/우는 화면에 보이는 기준. 미니맵(왼쪽 아래)에 다음 점이 빨간색으로 표시된다.
   "half" = 카메라가 바라보는 골대: cam1은 동쪽 골대(x=+20), cam2는 서쪽 골대(x=-20); h로 뒤집는다.
   보이는 사이드라인이 화면 왼쪽이면(카메라가 반대쪽 모서리, 1103 촬영) f로 좌우를 바꾼다: 미니맵과 점 이름이 바뀐다.
-키: 왼쪽 클릭 = 빨간 점 찍기, u = 되돌리기, h = 방향 뒤집기(첫 클릭 전), f = 좌우 반전(첫 클릭 전), m = 도움말 숨기기/보이기,
+  기본은 7클릭 후 Enter. 8, 9번은 선택 확인 클릭: 찍으면 10 m 지점 오클릭까지 드러난다. 각 클릭의 재투영 잔차(px)가
+  표시되고 5 px를 넘는 클릭은 빨간색으로 다시 찍기를 권한다. 안 보이면 s로 건너뛴다.
+키: 왼쪽 클릭 = 빨간 점 찍기, s = 확인 클릭 건너뛰기, u = 되돌리기, h = 방향 뒤집기(첫 클릭 전), f = 좌우 반전(첫 클릭 전), m = 도움말 숨기기/보이기,
     Enter = 확정, q = 종료.
 카메라별 출력: out/<회차>/H_cam<N>.json, frame_cam<N>.jpg, H_cam<N>_overlay.jpg (회차 = 환경변수 FUTSAL_MATCH, 기본 1008). 그다음 refine.py를 실행한다.
 """
@@ -27,7 +29,8 @@ import cv2
 import numpy as np
 
 from auto_init import auto_calibrate_video, median_of
-from calib_core import Source, click_landmarks, draw_overlay, manual_json, manual_result, match_dir, out_path
+from calib_core import (MISCLICK_PX, REQUIRED_CLICKS, Source, click_landmarks, click_residuals_px, draw_overlay, manual_json,
+                        manual_result, match_dir, out_path)
 from court import DEFAULT_SPEC, CourtSpec, court_lines
 
 
@@ -43,25 +46,41 @@ class Calibrator:
         self.mouse = None  # 돋보기용 마지막 커서 위치
         self.clicks = []
         self.result = None  # {"near": (H, world, err), "far": (H, world, err)}
+        self.residuals = {}  # 클릭 번호 -> 재투영 잔차 (px)
 
     @property
     def done(self):
         return len(self.clicks) == len(self.lms)
 
+    @property
+    def ready(self):
+        """필수 7클릭이 끝났다 (나머지 확인 클릭은 찍거나 s로 건너뛰거나 Enter로 생략)."""
+        return len(self.clicks) >= REQUIRED_CLICKS
+
     def _solve(self):
-        if not self.done:
-            return
-        self.result = manual_result(self.clicks, self.lms, self.half, self.spec)
+        self.result = manual_result(self.clicks, self.lms, self.half, self.spec) if self.ready else None
+        self.residuals = click_residuals_px(self.result, self.clicks, self.lms) if self.result else {}
+
+    @property
+    def suspicious(self):
+        """재투영 잔차가 MISCLICK_PX를 넘는 클릭 번호 (0부터)."""
+        return sorted(i for i, r in getattr(self, "residuals", {}).items() if r > MISCLICK_PX)
 
     def click(self, x, y):
         if not self.done:
             self.clicks.append((x, y))
             self._solve()
 
+    def skip(self):
+        """다음 점이 선택 확인 클릭이면 건너뛴다 (화면에 안 보일 때)."""
+        if not self.done and self.lms[len(self.clicks)].get("optional"):
+            self.clicks.append(None)
+            self._solve()
+
     def undo(self):
         if self.clicks:
             self.clicks.pop()
-            self.result = None
+            self._solve()
 
     def flip(self):
         if not self.clicks:
@@ -91,8 +110,12 @@ class Calibrator:
             cv2.circle(view, (px, py), 8, color, -1)
             cv2.putText(view, str(i + 1), (px - 4, py + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         tx = x0 + w + 25
-        if self.done:
+        if self.suspicious:
+            msg = "CHECK click " + ", ".join(str(i + 1) for i in self.suspicious) + f" (> {MISCLICK_PX:g} px off) - u: undo"
+        elif self.done:
             msg = "Enter: accept   u: undo"
+        elif self.lms[i_next].get("optional"):
+            msg = f"optional {i_next + 1}/{len(self.lms)}: {self.lms[i_next]['name']}  (s: skip, Enter: accept)"
         else:
             msg = f"click {i_next + 1}/{len(self.lms)}: {self.lms[i_next]['name']}"
         side = "LEFT (mirrored, f)" if self.mirror else "right (f: mirror)"
@@ -109,8 +132,13 @@ class Calibrator:
         else:
             view = self.frame.copy()
         for i, c in enumerate(self.clicks):
-            cv2.circle(view, tuple(map(int, c)), 7, (0, 255, 0), -1)
-            cv2.putText(view, str(i + 1), (int(c[0]) + 10, int(c[1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            if c is None:
+                continue
+            bad = i in self.suspicious
+            cv2.circle(view, tuple(map(int, c)), 7, (0, 0, 255) if bad else (0, 255, 0), -1)
+            r = getattr(self, "residuals", {}).get(i)
+            label = str(i + 1) + (f" {r:.1f}px" if r is not None else "")
+            cv2.putText(view, label, (int(c[0]) + 10, int(c[1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255) if bad else (0, 255, 255), 2)
         if self.show_map:
             self._minimap(view)
         self._magnifier(view)
@@ -202,6 +230,8 @@ def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC, mirror=False):  # 처�
                 cal.frame, cal.t = frame, new_t
         elif key == ord("u"):
             cal.undo()
+        elif key == ord("s"):
+            cal.skip()
         elif key == ord("h"):
             cal.flip()
         elif key == ord("f"):
@@ -211,7 +241,7 @@ def run_camera(n, path, half, t=60.0, spec=DEFAULT_SPEC, mirror=False):  # 처�
         elif key == ord("q"):
             cv2.destroyWindow(win)
             return False
-        elif key == 13 and cal.result:
+        elif key == 13 and cal.result and cal.ready:
             os.makedirs(match_dir(), exist_ok=True)
             cal.save(out_path(f"H_cam{n}.json"), video=path)
             print(f"cam{n}: facing {cal.half}, t={cal.t:.0f}s -> out/H_cam{n}.json")
