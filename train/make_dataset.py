@@ -4,6 +4,10 @@
 지점 이름은 '카메라에서 본' 기준이다(near/far, 왼쪽/오른쪽). 그래서 서로 마주 보는 두 카메라가 같은 의미를 갖는다.
 
 회차(out/<회차>/)마다 카메라 배치가 달라(1103은 1008의 좌우 반전 + 더 높은 위치) 여러 회차를 섞어 만든다.
+좌우 반전 배치(보정 때 --mirror, cal["mirror"])는 프레임과 라벨을 뒤집어 1008 배치(보이는 사이드라인이 화면 오른쪽)로
+맞춘다(canonical). 모델은 한 배치만 배우고, 반대 배치 카메라는 keypoint_init이 반전 프레임으로 푼다.
+두 배치를 한 모델에 섞으면(fliplr=0.5 또는 반전 영상 그대로) 왼쪽/오른쪽 짝을 섞어 낸다: 2026-11-11 학습에서
+1008 cam1 far_corner_right가 754 px, near_10m이 1064 px 틀림 (그 전 1008만 fliplr=0.5에서도 560~690 px).
 
 사용법: python train/make_dataset.py [--matches 1008 1103] [--step 3] [--out train/dataset] [--limit 0]
 출력: train/dataset/{images,labels}/{train,val}, data.yaml, train/court_pose_dataset.zip, train/preview/*.jpg
@@ -30,7 +34,8 @@ BOUNDARY_GUARD = 1.0  # 카메라가 움직인 구간 경계에서 제외하는 
 VAL_BLOCK = 120.0  # 시간 블록(s) 5개 중 1개를 검증용으로: 이웃 프레임이 학습과 검증에 나뉘지 않게
 UNRELIABLE = {"1008": {2: {"far_corner_left", "far_corner_right", "far_arc_left", "far_arc_right", "far_post_left", "far_post_right"}}}
 # 회차 -> 카메라 -> 라벨에서 뺄 지점. 1008 검증 점 채점에서 cam2의 먼 골라인은 1.7~3.4 m 어긋났다. 틀린 정답을 가르치지 않도록 뺀다.
-MATCHES = ("1008", "1103")
+sys.path.insert(0, os.path.join(ROOT, "eval"))
+from harness import check_purpose, log_usage, read_splits  # noqa: E402
 
 
 def keypoints(spec=DEFAULT_SPEC):
@@ -66,6 +71,14 @@ def project_keypoints(seg, half, cam, spec=DEFAULT_SPEC, size=(1920, 1080), t=No
         if EDGE_MARGIN <= x < size[0] - EDGE_MARGIN and EDGE_MARGIN <= y < size[1] - EDGE_MARGIN:
             out[i] = (x, y, 2)
     return out
+
+
+def canonical(frame, kp, size=(1920, 1080)):
+    """좌우 반전 배치의 프레임과 라벨을 1008 배치로: 화면 x -> W-1-x, 왼쪽/오른쪽 이름 교환 (FLIP_IDX)."""
+    out = np.asarray(kp, float)[FLIP_IDX].copy()
+    vis = out[:, 2] > 0
+    out[vis, 0] = size[0] - 1 - out[vis, 0]
+    return (None if frame is None else np.ascontiguousarray(frame[:, ::-1])), out
 
 
 def yolo_line(kp, size=(1920, 1080), pad=0.03):
@@ -118,8 +131,13 @@ def main():
     p.add_argument("--out", default=os.path.join(ROOT, "train", "dataset"))
     p.add_argument("--limit", type=int, default=0, help="카메라당 최대 프레임 수 (시험용)")
     p.add_argument("--no-zip", action="store_true")
-    p.add_argument("--matches", nargs="+", default=list(MATCHES), help="섞을 촬영 회차 (out/<회차>/calib_cam<N>.json)")
+    p.add_argument("--matches", nargs="+", default=None,
+                   help="학습 회차 (기본: eval/splits.json의 train). 검증/잠금 회차는 거부한다")
     a = p.parse_args()
+    splits = read_splits()
+    a.matches = a.matches or list(splits["train"])
+    for m in a.matches:
+        check_purpose(m, "train", splits)
     if os.path.exists(a.out):
         shutil.rmtree(a.out)
     for s in ("train", "val"):
@@ -147,8 +165,12 @@ def main():
             if seg is None:
                 continue
             kp = project_keypoints(seg, cal["half"], n, spec, t=t, match=m)
+            if cal.get("mirror"):
+                _, kp = canonical(None, kp)
             line = yolo_line(kp)
             frame = source.frame_at(t) if line else None
+            if frame is not None and cal.get("mirror"):
+                frame, _ = canonical(frame, kp)
             if frame is None:
                 continue
             stem, s = f"{m}_cam{n}_{t:07.1f}", split_of(t)
@@ -165,6 +187,9 @@ def main():
                 print(f"{m} cam{n}: {done} / {len(times)}", flush=True)
     with open(os.path.join(a.out, "data.yaml"), "w") as f:
         f.write(data_yaml())
+    for m in a.matches:
+        log_usage(m, "train", [os.path.join(match_dir(m), f"calib_cam{n}.json") for n in (1, 2)],
+                  {"dataset": os.path.relpath(a.out, ROOT), "frames": per_match.get(m, 0), "step": a.step})
     print(f"학습 {counts['train']}장, 검증 {counts['val']}장, 회차별 {per_match} -> {a.out}", flush=True)
     if not a.no_zip:
         path = shutil.make_archive(os.path.join(ROOT, "train", "court_pose_dataset"), "zip", a.out)

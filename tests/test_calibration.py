@@ -850,3 +850,62 @@ def test_walk_keeps_feature_confirmed_position_when_lines_fade(monkeypatch):
     assert all(x.ok and x.by == "features" and abs(x.dx) < 0.5 and abs(x.dy) < 0.5 for x in s)
     no_feat = tr.walk(Faded(), [5.0], G, pts, (0.0, 0.0), TrackConfig(use_features=False), 0.4, lambda *_: None, start_frame=_scene(sky=200))
     assert not no_feat[0].ok or abs(no_feat[0].dx) + abs(no_feat[0].dy) > 10  # 흰 선만으로는 엉뚱한 곳에 맞추거나 놓친다
+
+
+def test_mirrored_match_labels_become_the_1008_layout():
+    """1103(좌우 반전 배치)의 라벨은 화면과 함께 뒤집으면 1008 배치 카메라의 라벨과 같아야 한다 (모델은 한 배치만 배운다)."""
+    import make_dataset as md
+
+    F = np.array([[-1.0, 0, 1919], [0, 1, 0], [0, 0, 1]])
+    mirrored = seg_of(np.diag([1.0, -1.0, 1.0]) @ H_NEAR @ F)
+    plain = md.project_keypoints(seg_of(H_NEAR), "east", 1)
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    frame[:, :10] = 255
+    flipped, kp = md.canonical(frame, md.project_keypoints(mirrored, "east", 1))
+    assert np.allclose(kp[:, 2], plain[:, 2]) and np.allclose(kp[plain[:, 2] > 0], plain[plain[:, 2] > 0], atol=1e-6)
+    assert flipped[0, -1, 0] == 255 and flipped[0, 0, 0] == 0
+
+
+# ---- 평가 하네스 (eval/harness.py)
+
+
+def test_harness_zones_follow_camera_direction():
+    import harness as hz
+
+    assert [hz.zone_of((x, 0), "east") for x in (-10, -2, 2, 10, 18)] == ["near", "center", "center", "far_mid", "goal"]
+    assert [hz.zone_of((x, 0), "west") for x in (10, -10, -18)] == ["near", "far_mid", "goal"]
+
+
+def test_harness_scores_points_by_zone_with_components_and_ci():
+    import harness as hz
+
+    cal = {"half": "east", "H_near": H_NEAR.tolist(), "H_far": H_NEAR.tolist()}
+    world = np.array([[-10.0, 0.0], [10.0, 0.0], [18.0, 5.0]])
+    px = project(G, world)[0]
+    px[1, 0] += 3  # 먼 쪽 점 하나만 3 px 어긋나게 찍음
+    label = {"cam": 1, "t": 0.0, "half": "east", "source": "tape",
+             "points": [{"id": f"p{i}", "kind": "point", "px": px[i].tolist(), "world": world[i].tolist()} for i in range(3)]}
+    rows = hz.score_rows([label], lambda n: cal)
+    by = {r["id"]: r for r in rows}
+    assert by["p0"]["zone"] == "near" and by["p0"]["error"] < 1e-3
+    assert by["p1"]["zone"] == "far_mid" and by["p1"]["error"] > 0.02 and by["p1"]["ex"] is not None
+    assert by["p2"]["zone"] == "goal" and hz.gate_g1(rows)
+    s = hz.summarize(rows)
+    assert all(x["reference_only"] for x in s)  # n < 5
+    assert not hz.gate_g1([{**r, "source": "video_click"} for r in rows])
+
+
+def test_harness_median_ci_and_split_guard(tmp_path):
+    import harness as hz
+
+    lo, hi = hz.median_ci([1.0, 2.0, 3.0, 4.0, 5.0])
+    assert lo <= 3.0 <= hi and hz.median_ci([1.0]) != hz.median_ci([1.0])  # nan
+    splits = {"train": ["1103"], "tune": [], "val": ["1008"], "blind": ["1201"]}
+    assert hz.check_purpose("1103", "train", splits) == "train"
+    assert hz.check_purpose("1008", "val", splits) == "val"
+    for m, p in (("1008", "tune"), ("1201", "train"), ("1008", "train")):
+        with pytest.raises(ValueError):
+            hz.check_purpose(m, p, splits)
+    log = tmp_path / "log.jsonl"
+    rec = hz.log_usage("1008", "val", [str(log)], {"labels_n": 3}, path=str(log))
+    assert json.loads(log.read_text().splitlines()[-1])["purpose"] == "val" and rec["labels_n"] == 3

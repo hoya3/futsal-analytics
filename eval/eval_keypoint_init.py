@@ -3,7 +3,8 @@
 1) 경기 중 여러 시점: 같은 화면 격자를 두 결과로 코트에 옮긴 차이(m), 가까운 하프와 먼 하프 따로.
    정답도 흰 선 정렬로 만든 것이라 '기존 결과를 클릭 없이 재현하는가'를 보는 지표다.
 2) 검증 점 시각: 자동 결과로 사람 클릭을 채점 (score_points와 같은 방식).
-사용법: python eval/eval_keypoint_init.py [--cam 1]
+사용법: [FUTSAL_MATCH=1103] python eval/eval_keypoint_init.py [--cam 1]
+   (검증)은 make_dataset.split_of로 학습에 쓰지 않은 시간 블록의 시점이다.
 """
 import os
 import sys
@@ -21,6 +22,9 @@ from court_map import homographies_at, load  # noqa: E402
 from keypoint_init import keypoint_calibrate, load_model  # noqa: E402
 from label_points import LABELS_PATH, read_labels  # noqa: E402
 from score_points import score, summarize  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "train"))
+from make_dataset import split_of  # noqa: E402
 
 TIMES = tuple(range(200, 3200, 200))  # 15개 시점
 
@@ -63,7 +67,7 @@ def main(args):
         cal = load(n)
         spec = spec_of(cal)
         src = Source(cal["video"])
-        near_med, far_med, fails = [], [], 0
+        near_med, far_med, fails, val_near = [], [], 0, []
         for t in TIMES:
             seg = resolved(cal, t) and resolved(cal, t + 12)
             if seg is None:
@@ -80,13 +84,17 @@ def main(args):
             en = region_error(r["H_near"], Hn, cal["half"], spec, "near")
             ef = region_error(r["H_far"], Hf, cal["half"], spec, "far")
             near_med.append(en[0])
+            if split_of(t) == "val":
+                val_near.append(en[0])
             if ef:
                 far_med.append(ef[0])
             far_txt = f"먼 쪽 {ef[0]:5.2f} / {ef[1]:5.2f} m" if ef else "먼 쪽 -"
             print(f"cam{n} t={t:5d}: 지점 가까운 {r['n_near']:2d} 먼 {r['n_far']:2d} | 가까운 쪽 {en[0]:5.2f} / {en[1]:5.2f} m | "
-                  f"{far_txt} (중앙값 / 95%, {dt:.1f}s)", flush=True)
+                  f"{far_txt} (중앙값 / 95%) 일치율 {r['confidence']:.2f}{' 반전' if r.get('flipped') else ''}"
+                  f"{' (검증)' if split_of(t) == 'val' else ''} {dt:.1f}s", flush=True)
         print(f"cam{n}: 성공 {len(near_med)}/{len(near_med) + fails}, 시점별 중앙값의 중앙값 가까운 쪽 {np.median(near_med):.2f} m, "
-              f"먼 쪽 {np.median(far_med):.2f} m, 가까운 쪽 0.2 m 미만 {sum(e < 0.2 for e in near_med)}개", flush=True)
+              f"먼 쪽 {np.median(far_med):.2f} m, 가까운 쪽 0.2 m 미만 {sum(e < 0.2 for e in near_med)}개, "
+              f"검증 시점 가까운 쪽 중앙값 {np.median(val_near) if val_near else float('nan'):.2f} m ({len(val_near)}개)", flush=True)
 
     print("\n== 검증 점 채점: 자동 결과 vs 현재 캘리브레이션 ==")
     labels = [lb for lb in read_labels(LABELS_PATH) if lb["cam"] in cams]

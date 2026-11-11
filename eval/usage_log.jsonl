@@ -1,0 +1,1 @@
+{"time": "2026-11-11T19:42:55+09:00", "commit": "6434e3c", "dirty": true, "match": "1008", "role": "val", "purpose": "val", "files": {"out/1008/labels.json": "8c0120bc3b69f556", "out/1008/calib_cam1.json": "7875ab107dbe14f5", "out/1008/calib_cam2.json": "f9f8327c715d0cb4"}, "labels_n": 30, "times": [300.0, 1100.0]}
