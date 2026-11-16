@@ -92,19 +92,36 @@ def homographies_at(seg, t):
     return np.array(seg["H_near"], np.float64) @ back, np.array(seg["H_far"], np.float64) @ back
 
 
-def _apply(H_near, H_far, half, px):
+# far_model "free"(refine.FAR_MODELS)인 캘리브레이션은 H_far가 하프라인에서 H_near와 정확히 이어지지 않는다.
+# 그래서 하프라인 너머 이 거리(m)까지는 두 결과를 거리에 비례해 섞어 하프라인에서 위치가 튀지 않게 한다.
+# 1008 cam2 (HALFWAY_LAM 3, 검증 라벨): 섞지 않으면 센터 점 0.12 -> 0.40 m로 나빠진다.
+FAR_BLEND_M = 6.0
+
+
+def blend_width(cal):
+    """하프라인 너머 섞는 폭 (m). 기본 "shared" 캘리브레이션은 하프라인을 정확히 공유하므로 0 (섞지 않음)."""
+    if cal.get("far_model", "shared") != "free":
+        return 0.0
+    return float(cal.get("far_blend_m", FAR_BLEND_M))
+
+
+def _apply(H_near, H_far, half, px, blend=0.0):
     xy = cv2.perspectiveTransform(px, np.array(H_near, np.float64))[:, 0]
-    far = xy[:, 0] * HALF_SIGN[half] > 0  # 하프라인 너머: 먼 하프 호모그래피 사용
+    beyond = xy[:, 0] * HALF_SIGN[half]  # 하프라인 너머 거리 (H_near 기준, m)
+    far = beyond > 0  # 하프라인 너머: 먼 하프 호모그래피 사용
     if far.any():
-        xy[far] = cv2.perspectiveTransform(px[far], np.array(H_far, np.float64))[:, 0]
+        xy_far = cv2.perspectiveTransform(px[far], np.array(H_far, np.float64))[:, 0]
+        w = np.clip(beyond[far] / blend, 0.0, 1.0)[:, None] if blend > 0 else 1.0
+        xy[far] = (1.0 - w) * xy[far] + w * xy_far
     return xy
 
 
 def pixel_to_court(cal, px, t=None):
     px = np.asarray(px, np.float64).reshape(-1, 1, 2)
     segments = cal.get("segments")
+    blend = blend_width(cal)
     if segments is None:
-        return _apply(cal["H_near"], cal["H_far"], cal["half"], px)
+        return _apply(cal["H_near"], cal["H_far"], cal["half"], px, blend)
     if t is None:
         raise ValueError("시간별 캘리브레이션에는 t(영상 시각, 초)가 필요합니다")
     times = np.broadcast_to(np.asarray(t, np.float64), len(px))
@@ -114,5 +131,5 @@ def pixel_to_court(cal, px, t=None):
         seg = segments[i]
         sel = (which == i) & (times <= seg["t1"])
         if seg["source"] != "unresolved" and sel.any():
-            out[sel] = _apply(seg["H_near"], seg["H_far"], cal["half"], px[sel] - drift_at(seg, times[sel])[:, None])
+            out[sel] = _apply(seg["H_near"], seg["H_far"], cal["half"], px[sel] - drift_at(seg, times[sel])[:, None], blend)
     return out

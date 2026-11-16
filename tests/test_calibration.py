@@ -975,3 +975,79 @@ def test_resolve_video_finds_moved_file(tmp_path, monkeypatch):
     assert calib_core.resolve_video(str(moved)) == str(moved)  # 있는 경로는 그대로
     assert calib_core.resolve_video("/nowhere/unknown.mp4") == "/nowhere/unknown.mp4"  # 못 찾으면 원래 경로
     assert calib_core.resolve_video(None) is None
+
+
+def _render_bent(G_near, G_far, spec=CourtSpec(), seed=0):
+    """가까운 하프(x <= 0)는 G_near, 먼 하프는 G_far로 그린 프레임: 하프라인에서 바닥이 꺾인 코트."""
+    rng = np.random.default_rng(seed)
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    frame[:] = (60, 130, 50)
+    frame = np.clip(frame.astype(np.int16) + rng.integers(-12, 12, frame.shape), 0, 255).astype(np.uint8)
+    for line in court_lines(spec):
+        dense = np.concatenate([np.linspace(a, b, 60, endpoint=False) for a, b in zip(line[:-1], line[1:])])
+        px_n, d_n = project(G_near, dense)
+        px_f, d_f = project(G_far, dense)
+        far = dense[:, 0] > 0
+        px, depth = np.where(far[:, None], px_f, px_n), np.where(far, d_f, d_n)
+        keep = (depth > 0) & (np.abs(px) < 1e4).all(1)
+        for run in np.split(np.arange(len(dense)), np.where(~keep)[0]):
+            run = run[keep[run]]
+            if len(run) > 1:
+                cv2.polylines(frame, [np.rint(px[run] * 16).astype(np.int32)], False, (235, 235, 235), 5, cv2.LINE_AA, shift=4)
+    return frame
+
+
+def test_free_far_model_fits_a_bend_the_shared_model_cannot():
+    """먼 하프가 H_near o K 꼴이 아닌 경우(하프라인 방향 원근이 다름): "free"가 "shared"보다 먼 쪽을 잘 맞추고
+    하프라인에서는 H_near와 거의 이어진다. 기본값 "shared"는 그대로다."""
+    from refine import FAR_MARGIN, align_far, halfway_gap_m, ridge_map, sample_model
+
+    G_far_true = G @ np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.003, 1.0]])  # 3자유도 K로는 표현할 수 없는 꺾임
+    frame = _render_bent(G, G_far_true)
+    ridge = cv2.GaussianBlur(ridge_map(frame), (0, 0), 1)
+    model = sample_model()
+    pts = model[model[:, 0] > -FAR_MARGIN]
+    corners = CLICK_WORLD[5:]
+    corner_px = project(G_far_true, corners)[0]
+    xs, ys = np.meshgrid(np.linspace(3, 19, 9), np.linspace(-9, 9, 7))
+    grid = np.c_[xs.ravel(), ys.ravel()]
+    grid_px = project(G_far_true, grid)[0]
+
+    def far_error(H):
+        return np.median(np.linalg.norm(cv2.perspectiveTransform(grid_px.reshape(-1, 1, 2), H)[:, 0] - grid, axis=1))
+
+    H_shared, _ = align_far(ridge, H_NEAR, pts, "shared", anchor_world=corners, anchor_img=corner_px, half="east")
+    H_free, _ = align_far(ridge, H_NEAR, pts, "free", anchor_world=corners, anchor_img=corner_px, half="east")
+    # 측정 (HALFWAY_LAM 3): shared 0.21 m, free 0.12 m, free 하프라인 차이 0.23 m (참값의 꺾임은 하프라인 끝에서 0.29 m)
+    assert far_error(H_free) < 0.7 * far_error(H_shared)
+    assert far_error(H_free) < 0.15
+    assert halfway_gap_m(H_NEAR, H_shared) < 1e-6  # shared는 하프라인을 정확히 공유
+    assert halfway_gap_m(H_NEAR, H_free) < 0.35
+    with pytest.raises(ValueError):
+        align_far(ridge, H_NEAR, pts, "bogus")
+
+
+def test_free_far_model_blends_across_halfway_and_shared_is_unchanged():
+    """far_model "free": 하프라인에서는 H_near, FAR_BLEND_M 너머는 H_far, 그 사이는 연속. "shared"는 섞지 않는다."""
+    from court_map import FAR_BLEND_M
+
+    H_far = np.linalg.inv(translation(0, -6) @ G)  # 먼 쪽만 6 px 어긋난 H_far: 하프라인에서 H_near와 다르다
+    shared = {"half": "east", "H_near": H_NEAR.tolist(), "H_far": H_far.tolist()}
+    free = {**shared, "far_model": "free"}
+    ys = np.linspace(-8, 8, 5)
+
+    def px_at(x):
+        return project(G, np.c_[np.full(len(ys), x), ys])[0]
+
+    for x in (0.01, 0.5 * FAR_BLEND_M, FAR_BLEND_M + 2.0):
+        near = cv2.perspectiveTransform(px_at(x).reshape(-1, 1, 2), H_NEAR)[:, 0]
+        far = cv2.perspectiveTransform(px_at(x).reshape(-1, 1, 2), H_far)[:, 0]
+        got = pixel_to_court(free, px_at(x))
+        w = min(x / FAR_BLEND_M, 1.0)
+        assert np.allclose(got, (1 - w) * near + w * far, atol=1e-6)
+        assert np.allclose(pixel_to_court(shared, px_at(x)), far, atol=1e-9)  # shared: 하프라인 너머는 H_far 그대로
+    # 하프라인을 넘을 때 free는 튀지 않는다 (shared에 같은 H_far를 넣으면 튄다)
+    step_free = np.linalg.norm(pixel_to_court(free, px_at(0.01)) - pixel_to_court(free, px_at(-0.01)), axis=1).max()
+    step_shared = np.linalg.norm(pixel_to_court(shared, px_at(0.01)) - pixel_to_court(shared, px_at(-0.01)), axis=1).max()
+    assert step_free < 0.05 < step_shared
+    assert np.allclose(pixel_to_court({**shared, "far_blend_m": 9.0}, px_at(3.0)), pixel_to_court(shared, px_at(3.0)))

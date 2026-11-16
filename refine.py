@@ -6,9 +6,11 @@
 호모그래피를 다시 피팅한다. 탐색 반경을 줄여가며 반복.
   가까운 하프: RANSAC 피팅(펜스/선수 위의 매칭은 버림); 손으로 찍은 클릭을 큰 가중치의 앵커로 추가해
              피팅이 클릭에서 멀어지지 않게 한다.
-  먼 하프:   H_far = H_near o K, 여기서 K = I + v [1 0 0]은 하프라인(x = 0) 위의 모든 점을 그대로 두므로
+  먼 하프:   (기본 far_model "shared") H_far = H_near o K, 여기서 K = I + v [1 0 0]은 하프라인(x = 0) 위의 모든 점을 그대로 두므로
              두 호모그래피가 하프라인 전체에서 일치한다(선수가 하프라인을 넘어도 튀지 않음). RANSAC은
              inlier 매칭을 고르는 데만 쓰고, v (3개 값)는 그 매칭에 최소제곱으로 피팅한다.
+             far_model "free"(캘리브레이션 json의 키)면 그 결과에서 8자유도로 더 맞추고, 하프라인은 부드러운 제약으로만
+             잇는다(court_map이 하프라인 근처를 섞는다). 아래 FAR_MODELS 설명 참고.
 """
 import json
 
@@ -28,6 +30,19 @@ CIRCLE_PAD = 0.2  # 각 하프는 센터 서클 전체도 사용 (반지름 + �
 FAR_MARGIN = 8.0
 RADII = (25, 18, 12, 8, 5, 3, 3)  # px, 라운드별 ICP 탐색 반경
 FAR_ANCHOR_W = 30.0  # 먼 쪽 기준점 하나가 흰 선 매칭 몇 개만큼의 비중을 갖는가
+# 먼 하프 모델. "shared" = H_near o K (3자유도, 하프라인을 정확히 공유, 기본값).
+# "free" = 8자유도 호모그래피, 하프라인은 HALFWAY_LAM 가중치의 부드러운 제약으로만 잇는다. 먼 하프 바닥이 평면이
+# 아니어서 3자유도로 먼 쪽을 다 맞추지 못하는 카메라용. 하프라인에서 H_near와 정확히 이어지지 않으므로 court_map이
+# 하프라인 너머 FAR_BLEND_M까지 두 결과를 섞는다. 1008 cam2 (track.py --refit-far, 검증 라벨, 중앙값 / 90%):
+#   shared            센터 점 0.12 / 0.23 m, 먼 쪽 0.45 / 1.59 m
+#   free (lam 3, 섞기) 센터 점 0.12 / 0.24 m, 먼 쪽 0.37 / 0.66 m
+# lam 0.3은 구간 피팅이 흰 선 일치율 검사에서 떨어져 적용되지 않았고, 30은 먼 쪽이 0.50 m로 나빠졌다.
+# 1008 cam1에는 효과가 없다(오차가 골라인을 따른 방향이라 흰 선이 보지 못함).
+FAR_MODELS = ("shared", "free")
+HALFWAY_LAM = 3.0  # 하프라인 위 21점의 H_near-H_far 픽셀 차이에 곱하는 가중치
+# "free"가 쓰는 가까운 하프 선의 범위 (하프라인에서 m). 합성 꺾임에서는 3.2 m가 나았지만(0.11 vs 0.14 m)
+# 1008 cam2 실제 데이터에서는 8 m와 3.2 m가 같았다.
+FREE_FAR_MARGIN = 8.0
 
 
 def ridge_map(frame):
@@ -143,6 +158,72 @@ def icp_align_far(ridge, H_near, pts, radii=RADII, anchor_world=None, anchor_img
     return H / H[2, 2], ratio
 
 
+def _halfway(H_near, spec=DEFAULT_SPEC, n=21):
+    """하프라인 위 코트 점과 H_near로 투영한 픽셀."""
+    hw = np.c_[np.zeros(n), np.linspace(-spec.width / 2, spec.width / 2, n)]
+    return hw, project(front_facing(np.linalg.inv(H_near)), hw)[0]
+
+
+def icp_align_far_free(ridge, H_near, pts, H_init=None, radii=RADII, anchor_world=None, anchor_img=None,
+                       anchor_w=FAR_ANCHOR_W, lam=None, spec=DEFAULT_SPEC):
+    """먼 하프를 8자유도 호모그래피로 흰 선에 맞춘다. 하프라인은 H_near와 픽셀 차이에 lam(기본 HALFWAY_LAM) 가중치를 준
+    부드러운 제약. H_init(보통 icp_align_far 결과)에서 시작한다. (H_img2court, 마지막 라운드의 RANSAC 선 매칭 비율)을 반환."""
+    lam = HALFWAY_LAM if lam is None else lam
+    hw, hw_img = _halfway(H_near, spec)
+    G0 = front_facing(np.linalg.inv(H_near if H_init is None else H_init))
+    p = (G0 / G0[2, 2]).ravel()[:8]  # G0[2, 2] > 0 이므로 나눠도 카메라 앞/뒤 부호가 유지된다
+    has_anchor = anchor_world is not None and len(anchor_world) > 0
+    if has_anchor:
+        aw, ai = np.asarray(anchor_world, float), np.asarray(anchor_img, float)
+
+    def G_of(q):
+        return np.append(q, 1.0).reshape(3, 3)
+
+    def soft(q):
+        G = G_of(q)
+        r = [np.sqrt(lam) * (project(G, hw)[0] - hw_img).ravel()]
+        if has_anchor:
+            r.append(np.sqrt(anchor_w) * (project(G, aw)[0] - ai).ravel())
+        return np.concatenate(r)
+
+    ratio = 0.0
+    for r in radii:
+        src, dst = match_lines(ridge, G_of(p), pts, r)
+        if len(src) < 50:
+            break
+        _, inl = cv2.findHomography(src.astype(np.float32), dst.astype(np.float32), cv2.RANSAC, max(2.0, r / 3))
+        if inl is None:
+            break
+        keep = inl[:, 0] > 0
+        p = least_squares(lambda q: np.r_[(project(G_of(q), src[keep])[0] - dst[keep]).ravel(), soft(q)], p,
+                          x_scale="jac").x
+        ratio = keep.mean()
+    H = np.linalg.inv(G_of(p))
+    return H / H[2, 2], ratio
+
+
+def align_far(ridge, H_near, pts, model="shared", radii=RADII, anchor_world=None, anchor_img=None, spec=DEFAULT_SPEC,
+              half=None):
+    """먼 하프 피팅. model "shared"는 icp_align_far, "free"는 그 결과에서 시작하는 icp_align_far_free.
+    half를 주면 "free"는 pts 중 하프라인에서 FREE_FAR_MARGIN 안쪽까지의 선만 쓴다."""
+    if model not in FAR_MODELS:
+        raise ValueError(f"far_model은 {FAR_MODELS} 중 하나여야 합니다: {model!r}")
+    H, ratio = icp_align_far(ridge, H_near, pts, radii=radii, anchor_world=anchor_world, anchor_img=anchor_img)
+    if model == "free":
+        free_pts = pts if half is None else pts[in_half(pts, half, "far", margin=FREE_FAR_MARGIN)]
+        H, ratio = icp_align_far_free(ridge, H_near, free_pts, H_init=H, radii=radii, anchor_world=anchor_world,
+                                      anchor_img=anchor_img, spec=spec)
+    return H, ratio
+
+
+def halfway_gap_m(H_near, H_far, spec=DEFAULT_SPEC):
+    """하프라인 위에서 H_near와 H_far가 내는 코트 좌표의 최대 차이 (m). "shared"는 0, "free"는 작아야 한다."""
+    _, px = _halfway(H_near, spec)
+    a = cv2.perspectiveTransform(px.reshape(-1, 1, 2), np.asarray(H_near, float))[:, 0]
+    b = cv2.perspectiveTransform(px.reshape(-1, 1, 2), np.asarray(H_far, float))[:, 0]
+    return float(np.linalg.norm(a - b, axis=1).max())
+
+
 def far_anchors(d):
     """캘리브레이션 dict의 먼 쪽 기준점 (월드, 픽셀). 5클릭 시절 파일이나 자동 후보에는 없다."""
     far = d.get("world", {}).get("far", {})
@@ -165,8 +246,10 @@ def refine_camera(d, frame, log=print):
     # 하프라인은 보정된 가까운 하프의 것을 그대로 물려받는다.
     pts = model[in_half(model, d["half"], "far", margin=FAR_MARGIN)]
     far_world, far_img = far_anchors(d)
-    H_far, ratio = icp_align_far(ridge, H_near, pts, anchor_world=far_world, anchor_img=far_img)
-    log(f"  far half: {ratio:.0%} of line matches kept")
+    model_name = d.get("far_model", "shared")
+    H_far, ratio = align_far(ridge, H_near, pts, model_name, anchor_world=far_world, anchor_img=far_img, spec=spec,
+                             half=d["half"])
+    log(f"  far half ({model_name}): {ratio:.0%} of line matches kept, halfway gap {halfway_gap_m(H_near, H_far, spec):.2f} m")
     out["H_near"], out["H_far"] = H_near.tolist(), H_far.tolist()
     out["refined"] = "icp"
     return out
