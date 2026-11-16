@@ -25,6 +25,19 @@ import sys
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def rel_to_root(p):
+    """기록용 경로: 저장소 안이면 상대 경로, 아니면 그대로. Windows에서 드라이브가 다르면 relpath가 실패한다."""
+    if not os.path.isabs(p):
+        return p
+    try:
+        rel = os.path.relpath(p, ROOT)
+    except ValueError:
+        return p
+    return p if rel.startswith("..") else rel.replace(os.sep, "/")
+
+
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -112,7 +125,7 @@ def summarize(rows, by=("cam", "zone", "kind")):
 
 
 def read_splits(path=SPLITS_PATH):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -147,8 +160,8 @@ def log_usage(match, purpose, files, extra=None, path=USAGE_LOG):
     rec = {"time": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "commit": _git("rev-parse", "--short", "HEAD"),
            "dirty": bool(_git("status", "--porcelain", "--untracked-files=no")), "match": match,
            "role": role_of(match, read_splits()) if os.path.exists(SPLITS_PATH) else None, "purpose": purpose,
-           "files": {os.path.relpath(p, ROOT) if os.path.isabs(p) else p: _sha(p) for p in files}, **(extra or {})}
-    with open(path, "a") as f:
+           "files": {rel_to_root(p): _sha(p) for p in files}, **(extra or {})}
+    with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec
 

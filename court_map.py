@@ -23,7 +23,7 @@ def load_anchor(n, out_dir=None):
     """카메라 n의 단일 프레임 캘리브레이션 (보정본이 있으면 그것을 사용). out_dir 기본값은 현재 회차 폴더(calib_core.match_dir)."""
     out_dir = out_dir or match_dir()
     refined = os.path.join(out_dir, f"H_cam{n}_refined.json")
-    with open(refined if os.path.exists(refined) else os.path.join(out_dir, f"H_cam{n}.json")) as f:
+    with open(refined if os.path.exists(refined) else os.path.join(out_dir, f"H_cam{n}.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -32,7 +32,7 @@ def load_source(n, out_dir=None):
     out_dir = out_dir or match_dir()
     tracked = os.path.join(out_dir, f"calib_cam{n}.json")
     if os.path.exists(tracked):
-        with open(tracked) as f:
+        with open(tracked, encoding="utf-8") as f:
             return json.load(f)
     return load_anchor(n, out_dir)
 
@@ -45,13 +45,19 @@ def load(n, out_dir=None):
     sync_path = os.path.join(out_dir, "sync.json")
     if "segments" not in cal or not os.path.exists(sync_path):
         return cal
-    with open(sync_path) as f:
+    with open(sync_path, encoding="utf-8") as f:
         sync = json.load(f)
     name = sync["cameras"][str(n)]
     if os.path.basename(cal["video"]) == name:  # 동기화 영상으로 직접 추적한 결과는 이미 그 시각이다
         return cal
     entry = sync["videos"][name]
-    return to_sync_time(cal, os.path.join(os.path.dirname(cal["video"]), name), entry["source_time_of_output_0_s"], entry["duration_s"])
+    return to_sync_time(cal, sibling_path(cal["video"], name), entry["source_time_of_output_0_s"], entry["duration_s"])
+
+
+def sibling_path(path, name):
+    """같은 폴더의 다른 파일. 저장된 경로의 구분자(/ 또는 \\)를 따른다: JSON은 다른 OS에서 만든 경로일 수 있다."""
+    cut = max(path.rfind("/"), path.rfind("\\"))
+    return path[:cut + 1] + name if cut >= 0 else name
 
 
 def to_sync_time(cal, video_path, source_time_of_output_0, duration):

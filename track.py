@@ -449,11 +449,11 @@ def main(args):
     cams = [int(a) for a in args[: args.index("--step")]] if "--step" in args else [int(a) for a in args]
     for n in cams or (1, 2):
         if drift_only:
-            with open(out_path(f"calib_cam{n}.json")) as f:
+            with open(out_path(f"calib_cam{n}.json"), encoding="utf-8") as f:
                 result = json.load(f)
             print(f"cam{n}: 밀림만 다시 잰다 ({result['video']})", flush=True)
             measure_drift(Source(result["video"]), result, TrackConfig(), log=lambda m: print(m, flush=True))
-            with open(out_path(f"calib_cam{n}.json"), "w") as f:
+            with open(out_path(f"calib_cam{n}.json"), "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
             print(f"  -> out/calib_cam{n}.json", flush=True)
             continue
@@ -461,7 +461,7 @@ def main(args):
         source = Source(cal["video"])
         print(f"cam{n}: {cal['video']} ({source.duration:.0f} s)", flush=True)
         result = track_camera(source, cal, TrackConfig(step=step), log=lambda m: print(m, flush=True))
-        with open(out_path(f"calib_cam{n}.json"), "w") as f:
+        with open(out_path(f"calib_cam{n}.json"), "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
         save_previews(source, result, n)
         for seg in result["segments"]:

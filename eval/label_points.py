@@ -82,13 +82,13 @@ def make_label(cam, t, video, half, points, clicks):
 def read_labels(path=LABELS_PATH):
     if not os.path.exists(path):
         return []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)["labels"]
 
 
 def write_labels(labels, path=LABELS_PATH):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump({"labels": labels}, f, indent=1)
     os.replace(tmp, path)
 

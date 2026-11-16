@@ -80,12 +80,12 @@ def _load(session_id, root):
     path = os.path.join(_dir(session_id, root), "session.json")
     if not os.path.exists(path):
         raise SessionError(f"세션이 없습니다: {session_id}")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def _save(s, root):
-    with open(os.path.join(_dir(s["id"], root), "session.json"), "w") as f:
+    with open(os.path.join(_dir(s["id"], root), "session.json"), "w", encoding="utf-8") as f:
         json.dump(s, f, indent=2)
 
 
@@ -264,7 +264,7 @@ def accept(session_id, root=DEFAULT_ROOT, confirm_warnings=False, cfg=TrackConfi
     for holder in [result] + result["segments"]:
         if holder.get("H_near") is not None:
             holder["H_near"], holder["H_far"] = _to_original(holder["H_near"], scale), _to_original(holder["H_far"], scale)
-    with open(_result_path(s, root), "w") as f:
+    with open(_result_path(s, root), "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
     s.update(state="done", result=_result_path(s, root))
     _save(s, root)
@@ -281,7 +281,7 @@ def _flags(result):
 def _result(s, root):
     if s["state"] != "done":
         raise SessionError(f"아직 추적이 끝나지 않았습니다 (상태: {s['state']})")
-    with open(_result_path(s, root)) as f:
+    with open(_result_path(s, root), encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -308,7 +308,7 @@ def resolve_segment(session_id, index, clicks, t=None, root=DEFAULT_ROOT, confir
     if warnings and not confirm_warnings:
         return {"session": s["id"], "resolved": False, "confidence": round(score, 3), "warnings": warnings}
     seg.update(source="manual", H_near=_to_original(d["H_near"], s["scale"]), H_far=_to_original(d["H_far"], s["scale"]), score=score)
-    with open(_result_path(s, root), "w") as f:
+    with open(_result_path(s, root), "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
     return {"session": s["id"], "resolved": True, "confidence": round(score, 3), "warnings": warnings, "flags": _flags(result)}
 

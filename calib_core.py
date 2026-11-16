@@ -186,11 +186,42 @@ def draw_overlay(frame, H_near, H_far, half, spec=DEFAULT_SPEC):
     return view
 
 
+VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".avi")
+_video_index = {}
+
+
+def video_root():
+    """경기 영상을 찾을 폴더. 환경변수 FUTSAL_VIDEOS > 저장소 옆의 videos/ (D:\\02_Projects\\futsal\\videos 배치)."""
+    return os.environ.get("FUTSAL_VIDEOS") or os.path.join(os.path.dirname(ROOT), "videos")
+
+
+def resolve_video(path):
+    """저장된 영상 경로를 이 PC에서 열 수 있는 경로로 바꾼다.
+
+    캘리브레이션 JSON의 "video"는 만든 PC의 경로(예: WSL의 /mnt/d/02_Projects/캡스톤/1008/x_sync.mp4)라
+    다른 PC나 폴더를 옮긴 뒤에는 열리지 않는다. 그대로 있으면 그 경로를, 없으면 video_root() 아래에서
+    같은 파일 이름(촬영 날짜·시각이 들어 있어 회차 사이에 겹치지 않음)을 찾는다. 못 찾으면 원래 경로를 돌려준다
+    (여는 쪽이 "열 수 없습니다" 오류를 낸다)."""
+    if not path or os.path.exists(path):
+        return path
+    name = os.path.basename(path.replace("\\", "/"))
+    root = video_root()
+    if root not in _video_index:
+        index = {}
+        for folder, _, files in os.walk(root):
+            for f in files:
+                if f.lower().endswith(VIDEO_EXTS):
+                    index.setdefault(f, os.path.join(folder, f))
+        _video_index[root] = index
+    return _video_index[root].get(name, path)
+
+
 class Source:
-    """영상(탐색 가능) 또는 단일 이미지."""
+    """영상(탐색 가능) 또는 단일 이미지. 경로는 resolve_video로 이 PC의 위치를 찾는다."""
 
     def __init__(self, path):
-        self.is_video = path.lower().endswith((".mp4", ".mov", ".mkv", ".avi"))
+        path = resolve_video(path)
+        self.is_video = path.lower().endswith(VIDEO_EXTS)
         if self.is_video:
             self.cap = cv2.VideoCapture(path)
             if not self.cap.isOpened():

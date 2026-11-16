@@ -139,10 +139,10 @@ def test_to_sync_time_shifts_and_clips_segments():
 
 def test_load_uses_sync_time_when_sync_file_exists(tmp_path):
     cal = {**v2(True), "t_sec": 25.0, "video": "/videos/camera1.mp4"}
-    (tmp_path / "calib_cam1.json").write_text(json.dumps(cal))
+    (tmp_path / "calib_cam1.json").write_text(json.dumps(cal), encoding="utf-8")
     assert load(1, tmp_path)["segments"][2]["t0"] == 20.0  # sync.json이 없으면 원본 시각
     sync = {"cameras": {"1": "a_sync.mp4"}, "videos": {"a_sync.mp4": {"source_time_of_output_0_s": 8.0, "duration_s": 15.0}}}
-    (tmp_path / "sync.json").write_text(json.dumps(sync))
+    (tmp_path / "sync.json").write_text(json.dumps(sync), encoding="utf-8")
     out = load(1, tmp_path)
     assert [s["t0"] for s in out["segments"]] == [0.0, 2.0, 12.0]
     assert out["video"] == "/videos/a_sync.mp4"
@@ -596,9 +596,9 @@ def test_score_excludes_fit_corners_from_existing_labels():
 
 def test_load_does_not_shift_results_tracked_on_the_synced_video(tmp_path):
     cal = {**v2(True), "t_sec": 25.0, "video": "/videos/a_sync.mp4"}
-    (tmp_path / "calib_cam1.json").write_text(json.dumps(cal))
+    (tmp_path / "calib_cam1.json").write_text(json.dumps(cal), encoding="utf-8")
     sync = {"cameras": {"1": "a_sync.mp4"}, "videos": {"a_sync.mp4": {"source_time_of_output_0_s": 8.0, "duration_s": 15.0}}}
-    (tmp_path / "sync.json").write_text(json.dumps(sync))
+    (tmp_path / "sync.json").write_text(json.dumps(sync), encoding="utf-8")
     assert [s["t0"] for s in load(1, tmp_path)["segments"]] == [0.0, 10.0, 20.0]
 
 
@@ -764,7 +764,7 @@ def test_load_reads_the_selected_match(tmp_path, monkeypatch):
     import calib_core
     for match, video in (("1008", "a.mp4"), ("1103", "b.mp4")):
         os.makedirs(tmp_path / "out" / match)
-        with open(tmp_path / "out" / match / "H_cam1.json", "w") as f:
+        with open(tmp_path / "out" / match / "H_cam1.json", "w", encoding="utf-8") as f:
             json.dump({"half": "east", "video": video}, f)
     monkeypatch.setattr(calib_core, "ROOT", str(tmp_path))
     monkeypatch.delenv("FUTSAL_MATCH", raising=False)
@@ -910,7 +910,7 @@ def test_harness_median_ci_and_split_guard(tmp_path):
             hz.check_purpose(m, p, splits)
     log = tmp_path / "log.jsonl"
     rec = hz.log_usage("1008", "val", [str(log)], {"labels_n": 3}, path=str(log))
-    assert json.loads(log.read_text().splitlines()[-1])["purpose"] == "val" and rec["labels_n"] == 3
+    assert json.loads(log.read_text(encoding="utf-8").splitlines()[-1])["purpose"] == "val" and rec["labels_n"] == 3
 
 
 def _true_clicks(G_cam, lms):
@@ -958,3 +958,20 @@ def test_calibrator_skips_optional_checks_and_flags_misclicks():
     cal.click(*clicks[0])
     cal.skip()  # 필수 클릭은 건너뛸 수 없다
     assert len(cal.clicks) == 1
+
+
+def test_resolve_video_finds_moved_file(tmp_path, monkeypatch):
+    """JSON에 다른 PC(WSL) 경로가 적혀 있어도 FUTSAL_VIDEOS 아래에서 같은 파일 이름을 찾는다."""
+    import calib_core
+
+    (tmp_path / "1103").mkdir()
+    moved = tmp_path / "1103" / "20261103_165422_sync-001.mp4"
+    moved.write_bytes(b"")
+    monkeypatch.setenv("FUTSAL_VIDEOS", str(tmp_path))
+    calib_core._video_index.clear()
+    stale = "/mnt/d/02_Projects/캡스톤/1103/20261103_165422_sync-001.mp4"
+    assert calib_core.resolve_video(stale) == str(moved)
+    assert calib_core.resolve_video("C:\\old\\20261103_165422_sync-001.mp4") == str(moved)
+    assert calib_core.resolve_video(str(moved)) == str(moved)  # 있는 경로는 그대로
+    assert calib_core.resolve_video("/nowhere/unknown.mp4") == "/nowhere/unknown.mp4"  # 못 찾으면 원래 경로
+    assert calib_core.resolve_video(None) is None

@@ -35,7 +35,7 @@ VAL_BLOCK = 120.0  # 시간 블록(s) 5개 중 1개를 검증용으로: 이웃 �
 UNRELIABLE = {"1008": {2: {"far_corner_left", "far_corner_right", "far_arc_left", "far_arc_right", "far_post_left", "far_post_right"}}}
 # 회차 -> 카메라 -> 라벨에서 뺄 지점. 1008 검증 점 채점에서 cam2의 먼 골라인은 1.7~3.4 m 어긋났다. 틀린 정답을 가르치지 않도록 뺀다.
 sys.path.insert(0, os.path.join(ROOT, "eval"))
-from harness import check_purpose, log_usage, read_splits  # noqa: E402
+from harness import check_purpose, log_usage, read_splits, rel_to_root  # noqa: E402
 
 
 def keypoints(spec=DEFAULT_SPEC):
@@ -176,7 +176,7 @@ def main():
             stem, s = f"{m}_cam{n}_{t:07.1f}", split_of(t)
             small = cv2.resize(frame, (IMAGE_WIDTH, IMAGE_WIDTH * frame.shape[0] // frame.shape[1]), interpolation=cv2.INTER_AREA)
             cv2.imwrite(os.path.join(a.out, "images", s, stem + ".jpg"), small, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            with open(os.path.join(a.out, "labels", s, stem + ".txt"), "w") as f:
+            with open(os.path.join(a.out, "labels", s, stem + ".txt"), "w", encoding="utf-8") as f:
                 f.write(line + "\n")
             if done % max(len(times) // 3, 1) == 0:
                 cv2.imwrite(os.path.join(preview, stem + ".jpg"), draw_preview(frame, kp, names))
@@ -185,11 +185,11 @@ def main():
             per_match[m] = per_match.get(m, 0) + 1
             if done % 100 == 0:
                 print(f"{m} cam{n}: {done} / {len(times)}", flush=True)
-    with open(os.path.join(a.out, "data.yaml"), "w") as f:
+    with open(os.path.join(a.out, "data.yaml"), "w", encoding="utf-8") as f:
         f.write(data_yaml())
     for m in a.matches:
         log_usage(m, "train", [os.path.join(match_dir(m), f"calib_cam{n}.json") for n in (1, 2)],
-                  {"dataset": os.path.relpath(a.out, ROOT), "frames": per_match.get(m, 0), "step": a.step})
+                  {"dataset": rel_to_root(os.path.abspath(a.out)), "frames": per_match.get(m, 0), "step": a.step})
     print(f"학습 {counts['train']}장, 검증 {counts['val']}장, 회차별 {per_match} -> {a.out}", flush=True)
     if not a.no_zip:
         path = shutil.make_archive(os.path.join(ROOT, "train", "court_pose_dataset"), "zip", a.out)

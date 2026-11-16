@@ -165,7 +165,7 @@ class Calibrator:
 
     def save(self, out_json, video=None):
         cv2.imwrite(out_json.replace("H_", "frame_").replace(".json", ".jpg"), self.frame)
-        with open(out_json, "w") as f:
+        with open(out_json, "w", encoding="utf-8") as f:
             json.dump(self.to_json(video), f, indent=2)
         cv2.imwrite(out_json.replace(".json", "_overlay.jpg"), self.render())
 
@@ -197,7 +197,7 @@ def review_auto(n, path, half, spec):
     cv2.imwrite(out_path(f"frame_cam{n}.jpg"), frame)
     cv2.imwrite(out_path(f"H_cam{n}_overlay.jpg"), view)
     for name in (out_path(f"H_cam{n}.json"), out_path(f"H_cam{n}_refined.json")):  # 자동 후보는 이미 흰 선에 맞춰져 있다
-        with open(name, "w") as f:
+        with open(name, "w", encoding="utf-8") as f:
             json.dump(d, f, indent=2)
     print(f"cam{n}: 자동 후보 승인 -> out/H_cam{n}_refined.json")
     return True

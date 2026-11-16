@@ -31,7 +31,7 @@ def to_canvas(xy, geo):
 
 
 def main(path, t=None, bg=out_path("topdown.jpg")):
-    rows = list(csv.DictReader(open(path)))
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
     if t is not None:
         rows = [r for r in rows if abs(float(r["t"]) - t) < 0.1]
     cals = {n: load(n) for n in (1, 2)}
@@ -58,7 +58,7 @@ def main(path, t=None, bg=out_path("topdown.jpg")):
             cv2.circle(canvas, c, 9, (0, 0, 0), 1)
             cv2.putText(canvas, f"{r['id']}", (c[0] + 11, c[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     cv2.imwrite(out_path("players.jpg"), canvas)
-    with open(out_path("players_court.csv"), "w", newline="") as f:
+    with open(out_path("players_court.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)

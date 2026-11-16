@@ -16,7 +16,7 @@ from refine import match_lines, ridge_map, sample_model
 
 suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
 for n in (1, 2):
-    d = json.load(open(out_path(f"H_cam{n}{suffix}.json")))
+    d = json.load(open(out_path(f"H_cam{n}{suffix}.json"), encoding="utf-8"))
     model = sample_model(spec_of(d))
     ridge = cv2.GaussianBlur(ridge_map(cv2.imread(out_path(f"frame_cam{n}.jpg"))), (0, 0), 1)
     parts = []

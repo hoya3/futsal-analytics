@@ -174,7 +174,7 @@ def refine_camera(d, frame, log=print):
 
 if __name__ == "__main__":
     for n in (1, 2):
-        d = json.load(open(out_path(f"H_cam{n}.json")))
+        d = json.load(open(out_path(f"H_cam{n}.json"), encoding="utf-8"))
         if d.get("source") == "auto":  # 자동 후보는 클릭 앵커가 없고 이미 흰 선에 맞춰져 있다
             print(f"cam{n}: 자동 인식 결과라 건너뜀")
             continue
@@ -183,6 +183,6 @@ if __name__ == "__main__":
         frame = cv2.imread(out_path(f"frame_cam{n}.jpg"))
         print(f"cam{n}:")
         r = refine_camera(d, frame)
-        json.dump(r, open(out_path(f"H_cam{n}_refined.json"), "w"), indent=2)
+        json.dump(r, open(out_path(f"H_cam{n}_refined.json"), "w", encoding="utf-8"), indent=2)
         cv2.imwrite(out_path(f"H_cam{n}_refined_overlay.jpg"),
                     draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), r["half"], spec_of(r)))

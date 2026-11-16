@@ -11,7 +11,7 @@ import time
 import cv2
 import numpy as np
 
-from calib_core import draw_overlay, out_path
+from calib_core import draw_overlay, out_path, resolve_video
 from court import spec_of
 from court_map import homographies_at, load
 from topdown import main as build_clean_map
@@ -23,6 +23,7 @@ class Reader:
     """시각으로 프레임을 읽는다. 조금 앞으로 가는 요청은 탐색 없이 이어 읽어 재생을 빠르게 한다."""
 
     def __init__(self, path):
+        path = resolve_video(path)
         self.cap = cv2.VideoCapture(path)
         if not self.cap.isOpened():
             raise FileNotFoundError(f"영상을 열 수 없습니다: {path}")
