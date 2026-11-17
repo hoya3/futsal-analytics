@@ -1,0 +1,196 @@
+{
+ "time": "2026-11-17T15:43:11",
+ "torch": "2.14.1+cu130",
+ "smp": "0.5.0",
+ "albumentations": "2.0.8",
+ "gpu": "Tesla T4",
+ "model": {
+  "arch": "Unet",
+  "encoder": "resnet34",
+  "encoder_weights": "imagenet",
+  "input": [
+   1280,
+   720
+  ],
+  "pad_to": 32
+ },
+ "train": {
+  "epochs_run": 19,
+  "best_epoch": 7,
+  "max_epochs": 60,
+  "patience": 12,
+  "batch": 8,
+  "lr": 0.0005,
+  "wd": 0.0001,
+  "dice_w": 1.0,
+  "loss": "weighted CE + Dice(line classes)",
+  "class_weights": [
+   0.05,
+   0.9929857600577671,
+   1.1814942920316938,
+   1.0,
+   0.5342913980586951,
+   1.1989809925298085,
+   1.0,
+   1.3263902137685617,
+   0.5583063444573478,
+   4.011130778747969
+  ],
+  "n_train": 2351,
+  "n_val": 2106
+ },
+ "data": {
+  "ignore_index": 255,
+  "image_size": [
+   1280,
+   720
+  ],
+  "line_width_m": 0.08,
+  "spot_radius_m": 0.1,
+  "min_width_px": 2,
+  "canonical": "1008 layout (visible near sideline on the right); mirrored matches flipped",
+  "matches": {
+   "1103": {
+    "split": "train",
+    "mirror": true,
+    "frames": {
+     "cam1": 1178,
+     "cam2": 1173
+    }
+   },
+   "1008": {
+    "split": "val",
+    "mirror": false,
+    "frames": {
+     "cam1": 1048,
+     "cam2": 1058
+    }
+   }
+  },
+  "split": "by match (eval/splits.json): 1103 -> train, 1008 -> val",
+  "draw_order": "class index ascending; later classes overwrite earlier ones",
+  "step_s": 3.0,
+  "pixel_percent": {
+   "train": {
+    "background": 97.4677,
+    "halfway_line": 0.2385,
+    "center_circle": 0.1685,
+    "sideline_left": 0.2352,
+    "sideline_right": 0.8238,
+    "far_goal_line": 0.1636,
+    "near_goal_line": 0.0,
+    "far_penalty_area": 0.1337,
+    "near_penalty_area": 0.7545,
+    "spots": 0.0146,
+    "ignore": 0.0
+   },
+   "val": {
+    "background": 97.2759,
+    "halfway_line": 0.2678,
+    "center_circle": 0.1922,
+    "sideline_left": 0.2003,
+    "sideline_right": 0.9334,
+    "far_goal_line": 0.0822,
+    "near_goal_line": 0.0,
+    "far_penalty_area": 0.0677,
+    "near_penalty_area": 0.8017,
+    "spots": 0.009,
+    "ignore": 0.1699
+   }
+  },
+  "commit": "c1972cb",
+  "note": "1103 cam1 resumed after the generator process was killed at 3349.5 s (same per-frame code)"
+ },
+ "val": {
+  "line_miou": 0.48413,
+  "line_tol_f1": 0.86962,
+  "tol_px": 2,
+  "any_line_tol": {
+   "precision": 0.8740411415070424,
+   "recall": 0.8899985000299752,
+   "f1": 0.8819476462875522
+  },
+  "per_class": {
+   "background": {
+    "iou": 0.98412,
+    "tol_precision": 0.99775,
+    "tol_recall": 0.99786,
+    "tol_f1": 0.9978,
+    "gt_pixels": 1888017724,
+    "pred_pixels": 1883433118
+   },
+   "halfway_line": {
+    "iou": 0.63361,
+    "tol_precision": 0.99228,
+    "tol_recall": 0.99794,
+    "tol_f1": 0.9951,
+    "gt_pixels": 5197001,
+    "pred_pixels": 6215336
+   },
+   "center_circle": {
+    "iou": 0.587,
+    "tol_precision": 0.9945,
+    "tol_recall": 0.99307,
+    "tol_f1": 0.99379,
+    "gt_pixels": 3730070,
+    "pred_pixels": 4457072
+   },
+   "sideline_left": {
+    "iou": 0.40639,
+    "tol_precision": 0.85228,
+    "tol_recall": 0.84655,
+    "tol_f1": 0.84941,
+    "gt_pixels": 3887140,
+    "pred_pixels": 4281962
+   },
+   "sideline_right": {
+    "iou": 0.74212,
+    "tol_precision": 0.93957,
+    "tol_recall": 0.95794,
+    "tol_f1": 0.94867,
+    "gt_pixels": 18117095,
+    "pred_pixels": 19090356
+   },
+   "far_goal_line": {
+    "iou": 0.43705,
+    "tol_precision": 0.62372,
+    "tol_recall": 0.99965,
+    "tol_f1": 0.76816,
+    "gt_pixels": 1594800,
+    "pred_pixels": 3091633
+   },
+   "near_goal_line": {
+    "iou": null,
+    "tol_precision": null,
+    "tol_recall": null,
+    "tol_f1": null,
+    "gt_pixels": 0,
+    "pred_pixels": 0
+   },
+   "far_penalty_area": {
+    "iou": 0.46732,
+    "tol_precision": 0.71993,
+    "tol_recall": 0.99846,
+    "tol_f1": 0.83662,
+    "gt_pixels": 1314632,
+    "pred_pixels": 1996924
+   },
+   "near_penalty_area": {
+    "iou": 0.36159,
+    "tol_precision": 0.76084,
+    "tol_recall": 0.71745,
+    "tol_f1": 0.73851,
+    "gt_pixels": 15559231,
+    "pred_pixels": 14882196
+   },
+   "spots": {
+    "iou": 0.23792,
+    "tol_precision": 0.88339,
+    "tol_recall": 0.77689,
+    "tol_f1": 0.82672,
+    "gt_pixels": 174355,
+    "pred_pixels": 143451
+   }
+  }
+ }
+}

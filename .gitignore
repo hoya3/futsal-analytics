@@ -16,3 +16,14 @@ train/*.pt
 
 # Windows가 내려받은 파일에 붙이는 메타데이터
 *:Zone.Identifier
+
+# eval/eval_autocal.py: 시점 중앙값 프레임(경기 영상) 캐시와 결과
+out/**/cache_autocal/
+out/autocal_*.json
+
+# train/make_seg_dataset.py: 코트 라인 분할 데이터셋 (경기 영상 프레임이 들어 있음)
+train/seg_dataset/
+train/seg_preview/
+train/court_seg_dataset.zip
+# 학습된 분할 모델 (court_seg.py가 읽는 TorchScript, 약 98 MB)
+train/*.ts

@@ -743,6 +743,7 @@ def test_service_uses_keypoint_model_only_when_weights_exist(monkeypatch, tmp_pa
     called = []
     monkeypatch.setattr(svc, "auto_calibrate_video", lambda *a, **k: called.append("pose_grid") or {"status": "failed"})
     monkeypatch.setattr(ki, "keypoint_calibrate_video", lambda *a, **k: called.append("keypoint") or {"status": "failed"})
+    monkeypatch.setattr(svc, "SEG_MODELS", (str(tmp_path / "missing.ts"),))
     monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(tmp_path / "missing.pt"))
     svc.find_court(None, "east", CourtSpec())
     weights = tmp_path / "best.pt"
@@ -750,6 +751,71 @@ def test_service_uses_keypoint_model_only_when_weights_exist(monkeypatch, tmp_pa
     monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(weights))
     svc.find_court(None, "east", CourtSpec())
     assert called == ["pose_grid", "keypoint"]
+
+
+def test_service_prefers_segmentation_model(monkeypatch, tmp_path):
+    pytest.importorskip("torch")
+    import keypoint_init as ki
+    import seg_init as si
+
+    called = []
+    monkeypatch.setattr(ki, "keypoint_calibrate_video", lambda *a, **k: called.append("keypoint") or {"status": "failed"})
+    monkeypatch.setattr(si, "seg_calibrate_video", lambda *a, **k: called.append("seg") or {"status": "failed"})
+    seg = tmp_path / "seg_best.ts"
+    seg.write_bytes(b"")
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"")
+    monkeypatch.setattr(svc, "SEG_MODELS", (str(seg),))
+    monkeypatch.setattr(svc, "KEYPOINT_MODEL", str(weights))
+    svc.find_court(None, "east", CourtSpec())
+    assert called == ["seg"]
+
+
+def test_seg_video_picks_mirror_once_and_reuses_it(monkeypatch):
+    import seg_init as si
+
+    Gi = np.array([[60.0, 0.0, 960.0], [0.0, 30.0, 700.0], [0.0, 0.0, 1.0]])  # 판정(decide)은 바꿔 끼운다
+    calls = []
+
+    def fake(frame, half, spec, model=None, mirror=False, far_model="shared", **k):
+        calls.append((mirror, far_model))
+        if mirror:  # 이 영상은 반전 배치: 맞는 배치만 풀린다
+            return {"status": "ok", "H_near": np.linalg.inv(Gi).tolist(), "H_far": np.linalg.inv(Gi).tolist(),
+                    "confidence": 0.9, "seg_score": np.float64(0.95), "n_near": np.int64(4), "_G": Gi, "_size": (1920, 1080)}
+        return {"status": "failed", "H_near": None, "confidence": 0.0, "seg_score": 0.2}
+
+    monkeypatch.setattr(si, "seg_calibrate", fake)
+    monkeypatch.setattr("auto_init.median_of", lambda source, t: np.zeros((4, 4, 3), np.uint8))
+    monkeypatch.setattr("keypoint_init.decide", lambda results, spec: (0, [0, 1, 2], "ok"))
+    r = si.seg_calibrate_video(FakeSource(60, lambda t: None), "east", CourtSpec(), times=[10.0, 20.0, 30.0], model=object())
+    assert [m for m, _ in calls] == [False, True, True, True]  # 첫 시점만 두 배치, 이후는 정해진 배치
+    assert all(f == "free" for _, f in calls)
+    assert r["status"] == "ok" and r["mirror"] is True and r["far_model"] == "free" and r["method"] == "segmentation"
+    json.dumps(r)  # 세션 파일에 저장할 수 있다 (numpy 값 없음)
+
+
+def test_accept_passes_auto_far_model_and_mirror_to_tracking(monkeypatch, tmp_path):
+    from dataclasses import asdict
+
+    seen = {}
+    H = np.eye(3).tolist()
+    s = {"id": "cam1-test", "video": "v.mp4", "cam": 1, "half": "east", "spec": asdict(CourtSpec()), "scale": 1.0,
+         "state": "needs_review", "warnings": [],
+         "candidate": {"source": "auto", "t_sec": 5.0, "H_near": H, "H_far": H, "confidence": 0.9,
+                       "far_model": "free", "mirror": True}}
+    os.makedirs(tmp_path / s["id"])
+    svc._save(s, str(tmp_path))
+    monkeypatch.setattr(svc, "_open_scaled", lambda video: None)
+
+    def fake_track(source, anchor, cfg, log):
+        seen.update(anchor)
+        return {**anchor, "segments": []}
+
+    monkeypatch.setattr(svc, "track_camera", fake_track)
+    svc.accept(s["id"], root=str(tmp_path))
+    assert seen["far_model"] == "free" and seen["mirror"] is True
+    with open(tmp_path / s["id"] / "calib_cam1.json", encoding="utf-8") as f:
+        assert json.load(f)["far_model"] == "free"
 
 
 def test_match_dir_picks_match_from_arg_env_default(monkeypatch):
@@ -1079,3 +1145,180 @@ def test_mirrored_validation_points_match_the_screen_side_and_score_zero():
     errors = [r["error"] for r in sp.score([label], lambda n: cal)]
     assert len(errors) == len(lms) and max(errors) < 0.05
     assert lp.validation_points() == lp._validation_points()  # 기본(반전 없음)은 그대로
+
+
+# ---- 코트 라인 분할 데이터셋 (train/make_seg_dataset.py)
+
+
+def test_seg_mask_follows_projected_lines_flip_and_ignore():
+    import make_seg_dataset as sd
+
+    size, s = (1280, 720), 1280 / 1920
+    mask = sd.render_mask(H_NEAR, H_NEAR, "east", size=size)
+    assert mask.shape == (720, 1280) and mask.dtype == np.uint8
+
+    def px(xy):  # 원본 1080p 투영 -> 저장 해상도 (픽셀 중심 기준)
+        p = project(G, np.array(xy, float))[0]
+        return (p + 0.5) * s - 0.5
+
+    # 하프라인 위의 점(서클과 스폿 밖)은 클래스 1, 하프라인 픽셀은 모두 x=0 투영선에서 2 px 이내
+    ys = np.r_[np.linspace(-9.5, -3.5, 13), np.linspace(3.5, 9.5, 13)]
+    on = px(np.c_[np.zeros_like(ys), ys])
+    vis = (on[:, 0] >= 0) & (on[:, 0] < 1280) & (on[:, 1] >= 0) & (on[:, 1] < 720)
+    assert vis.sum() >= 5
+    assert (mask[np.rint(on[vis, 1]).astype(int), np.rint(on[vis, 0]).astype(int)] == sd.CLS["halfway_line"]).all()
+    rr, cc = np.nonzero(mask == sd.CLS["halfway_line"])
+    a, b = px([[0.0, -10.0]])[0], px([[0.0, 10.0]])[0]
+    e, q = b - a, np.c_[cc, rr] - a
+    dist = np.abs(e[0] * q[:, 1] - e[1] * q[:, 0]) / np.linalg.norm(e)
+    assert dist.max() < 2.0
+    # 먼 선도 최소 굵기로 남고, 가까운 선은 실제 폭이라 더 두껍다
+    for cls in ("far_goal_line", "sideline_right", "center_circle", "near_penalty_area", "spots"):
+        assert (mask == sd.CLS[cls]).any(), cls
+    near_side = px([[-14.0, -10.0]])[0]
+    r, c = int(round(near_side[1])), int(round(near_side[0]))
+    far_goal = px([[20.0, 0.0]])[0]
+    near_w = (mask[r - 30:r + 30, c] == sd.CLS["sideline_right"]).sum()
+    far_w = (mask[:, int(round(far_goal[0]))] == sd.CLS["far_goal_line"]).sum()
+    assert near_w > far_w >= sd.MIN_WIDTH_PX
+    assert sd.halfway_gap_px(_seg_proj(sd, H_NEAR, H_NEAR)) == 0.0
+
+    # 서쪽을 보는 카메라(코트 180도 회전)는 같은 화면 마스크
+    west = sd.render_mask(np.diag([-1.0, -1.0, 1.0]) @ H_NEAR, np.diag([-1.0, -1.0, 1.0]) @ H_NEAR, "west", size=size)
+    assert (west == mask).mean() > 0.9999
+
+    # canonical: 좌우 반전 + sideline_left/right 교환, 나머지 클래스는 그대로
+    flipped = sd.canonical_mask(mask)
+    assert mask[r, c] == sd.CLS["sideline_right"] and flipped[r, 1279 - c] == sd.CLS["sideline_left"]
+    for k in range(10):
+        swap = {3: 4, 4: 3}.get(k, k)
+        assert (flipped == swap).sum() == (mask == k).sum()
+
+    # UNRELIABLE (1008 cam2 먼 골대 구역) -> 255, 다른 카메라/회차는 그대로
+    cam2 = sd.render_mask(H_NEAR, H_NEAR, "east", cam=2, match="1008", size=size)
+    for cls in ("far_goal_line", "far_penalty_area"):
+        assert not (cam2 == sd.CLS[cls]).any() and (mask == sd.CLS[cls]).any()
+    assert (cam2 == sd.IGNORE).sum() > 0 and not (mask == sd.IGNORE).any()
+    assert (cam2 == sd.CLS["halfway_line"]).sum() == (mask == sd.CLS["halfway_line"]).sum()
+    assert not (sd.render_mask(H_NEAR, H_NEAR, "east", cam=2, match="1103", size=size) == sd.IGNORE).any()
+
+    # shared 모델에서 H_far가 하프라인에서 어긋나면 하프라인 둘레가 무시(255)
+    bent = np.linalg.inv(translation(6.0, 0.0) @ G)
+    gap = sd.render_mask(H_NEAR, bent, "east", size=size)
+    assert (gap == sd.IGNORE).any() and (gap == sd.CLS["halfway_line"]).any()
+
+
+def _seg_proj(sd, H_near, H_far):
+    proj = sd.Projector(H_near, H_far, "east", (1280 / 1920, 720 / 1080))
+    proj.size = (1280, 720)
+    return proj
+
+
+# ---- 세그멘테이션 기반 자동 초기화 (seg_init.py): 모델 대신 정답 마스크(one-hot)를 넣어 기하만 검증
+
+
+def _seg_input(H, mirror=False, drop=()):
+    """정답 클래스 마스크를 모델 출력 꼴 (labels, conf)로. mirror면 모델처럼 sideline_left/right 이름이 바뀐다."""
+    import make_seg_dataset as sd
+
+    mask = sd.render_mask(H, H, "east", size=(1920, 1080), src_size=(1920, 1080))
+    for name in drop:
+        mask[mask == sd.CLS[name]] = 0
+    if mirror:
+        lut = np.arange(256, dtype=np.uint8)
+        for a, b in sd.FLIP_CLASS.items():
+            lut[a] = b
+        mask = lut[mask]
+    return mask, np.ones(mask.shape, np.float32)
+
+
+def _probe_error(r, Gc, world):
+    px, _ = project(Gc, world)
+    return np.linalg.norm(pixel_to_court({"half": "east", **r}, px) - world, axis=1).max()
+
+
+def test_seg_init_recovers_homography_from_class_map():
+    import keypoint_init as ki
+    import seg_init as si
+
+    r = si.seg_calibrate(render(G), "east", seg_probs=_seg_input(H_NEAR))
+    assert r["status"] == "ok" and r["confidence"] >= ki.ACCEPT_SCORE
+    assert {"halfway_line", "sideline_left", "sideline_right", "far_goal_line"} <= set(r["lines"])
+    assert r["_size"] == (1920, 1080) and r["n_near"] >= 4 and r["n_far"] >= 2
+    assert _probe_error(r, G, np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0], [0.0, 0.0]])) < 0.1
+    assert _probe_error(r, G, np.array([[15.0, 5.0], [8.0, -6.0], [19.0, 9.0]])) < 0.15
+    # 먼 골라인/먼 페널티 에어리어가 없어도 센터 서클로 x 방향 축척을 정한다
+    r2 = si.seg_calibrate(render(G), "east", seg_probs=_seg_input(H_NEAR, drop=("far_goal_line", "far_penalty_area")))
+    assert r2["status"] == "ok" and "far_goal_line" not in r2["lines"]
+    assert _probe_error(r2, G, np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0]])) < 0.1
+    # 서쪽을 보는 카메라: 같은 화면이면 코트 좌표만 180도 돌아간다
+    west = si.seg_calibrate(render(G), "west", seg_probs=_seg_input(H_NEAR))
+    probe = np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0]])
+    got = pixel_to_court({"half": "west", **west}, project(G, probe)[0])
+    assert west["status"] == "ok" and np.linalg.norm(got + probe, axis=1).max() < 0.1
+
+
+def test_seg_init_swaps_sidelines_for_mirrored_camera():
+    """좌우 반전 배치(1103): court_seg.predict(mirror=True)는 픽셀만 되돌리고 이름은 정규 배치 그대로라, 원래 화면의
+    sideline_left는 코트 y<0 사이드라인이다. mirror=True면 바로 풀리고, 이름을 그대로 믿으면(mirror=False) 코트가 y로 뒤집힌다."""
+    import seg_init as si
+
+    F = np.array([[-1.0, 0, 1919], [0, 1, 0], [0, 0, 1]])
+    H_m = np.diag([1.0, -1.0, 1.0]) @ H_NEAR @ F
+    G_m = front_facing(np.linalg.inv(H_m))
+    frame, seg = render(G_m), _seg_input(H_m, mirror=True)
+    probe = np.array([[-15.0, 5.0], [-8.0, -6.0], [-3.0, 2.0]])
+    r = si.seg_calibrate(frame, "east", seg_probs=seg, mirror=True)
+    assert r["status"] == "ok" and _probe_error(r, G_m, probe) < 0.1
+    wrong = si.seg_calibrate(frame, "east", seg_probs=seg, mirror=False)
+    px, _ = project(G_m, probe)
+    got = pixel_to_court({"half": "east", **wrong}, px)
+    assert np.allclose(got, probe * [1.0, -1.0], atol=0.3)  # 사이드라인 이름이 바뀐 만큼 y가 뒤집힌 답
+    # 클래스 지도 처리: 확률 문턱과 좌우 교환
+    labels, conf = si.seg_labels((np.array([[3, 4, 1]], np.uint8), np.array([[0.9, 0.9, 0.2]], np.float32)))
+    assert labels.tolist() == [[3, 4, 0]]
+    assert si.true_classes(labels, True).tolist() == [[4, 3, 0]] and si.true_classes(labels, False) is labels
+    probs = np.zeros((10, 1, 2), np.float32)
+    probs[0, 0, 0], probs[5, 0, 1] = 1.0, 0.8
+    assert si.seg_labels(probs)[0].tolist() == [[0, 5]]
+
+
+def test_seg_init_fails_with_reason_when_classes_are_missing():
+    import seg_init as si
+
+    frame = render(G)
+    no_half = si.seg_calibrate(frame, "east", seg_probs=_seg_input(H_NEAR, drop=("halfway_line",)))
+    assert no_half["status"] == "failed" and "하프라인" in no_half["reason"] and no_half["H_near"] is None
+    # 하프라인 + 사이드라인 하나뿐: 직선 두 개로는 코트 점이 하나라 초기 행렬을 만들 수 없다
+    lonely = _seg_input(H_NEAR, drop=("center_circle", "sideline_left", "far_goal_line", "far_penalty_area",
+                                      "near_penalty_area", "spots"))
+    r = si.seg_calibrate(frame, "east", seg_probs=lonely)
+    assert r["status"] == "failed" and r["reason"] and r["confidence"] == 0.0
+    empty = si.seg_calibrate(frame, "east", seg_probs=(np.zeros((1080, 1920), np.uint8), np.ones((1080, 1920), np.float32)))
+    assert empty["status"] == "failed"
+
+
+def test_camera_check_accepts_real_calibrations_and_rejects_impossible_cameras():
+    """자동 통과의 물리 검사: 저장소의 정답 캘리브레이션 4개(1008·1103 x 2대)는 통과하고, 코트를 한 방향으로 늘린 해
+    (1008에서 틀린 자동 통과의 모양), 바닥에 붙은 카메라, 코트 안의 카메라는 걸린다. decide는 그런 대표를 통과시키지 않는다."""
+    import keypoint_init as ki
+    from auto_init import ROT180
+
+    for match in ("1008", "1103"):
+        for n in (1, 2):
+            cal = load(n, os.path.join(ROOT, "out", match))
+            seg = next(s for s in cal["segments"] if s["source"] == "manual")
+            G = front_facing(np.linalg.inv((np.eye(3) if cal["half"] == "east" else ROT180) @ np.array(seg["H_near"])))
+            ok, why = ki.camera_check({"_G": G, "_size": (1920, 1080)})
+            assert ok, f"{match} cam{n}: {why}"
+
+    stretched = G @ np.diag([1.0, 1.4, 1.0])  # 코트 y 방향으로 1.4배 늘린 해
+    assert not ki.camera_check({"_G": stretched, "_size": (1920, 1080)})[0]
+    ok_g = front_facing(np.linalg.inv(H_NEAR))
+    assert ki.camera_check({"_G": ok_g, "_size": (1920, 1080)})[0]
+
+    r_ok = {"_G": ok_g, "_size": (1920, 1080), "confidence": 0.9, "H_near": H_NEAR.tolist()}
+    r_bad = {"_G": ok_g @ np.diag([1.0, 1.4, 1.0]), "_size": (1920, 1080), "confidence": 0.9, "H_near": H_NEAR.tolist()}
+    assert ki.decide([r_ok] * 5)[2] == "ok"
+    assert ki.decide([r_bad] * 5)[2] == "low_confidence"
+    assert ki.decide([r_bad] * 5, check_camera=False)[2] == "ok"

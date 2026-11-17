@@ -10,7 +10,7 @@ import sys
 import cv2
 import numpy as np
 
-from auto_init import ROT180, consensus, median_of
+from auto_init import ROT180, camera_from, consensus, median_of
 from calib_core import front_facing, in_half, to_world
 from court import DEFAULT_SPEC
 from refine import CIRCLE_PAD, FAR_MARGIN, icp_align, icp_align_far, ridge_map, sample_model
@@ -31,6 +31,15 @@ ANCHOR_W = 100  # ICP에서 키포인트 하나의 비중 (흰 선 매칭 몇 �
 # 자동 후보로 내놓는 가까운 쪽 흰 선 일치율 하한 (calib_service의 수동 클릭 검사와 같은 값).
 # 측정 (15개 시점): 자동 결과 최소 0.55~0.65, 중앙값 0.71~0.84 / 15~30 px 틀어진 결과 최대 0.52
 ACCEPT_SCORE = 0.6
+# 자동 통과의 물리 검사: 대표 해의 H_near를 카메라로 분해(주점 = 화면 중앙, 정사각 화소; auto_init.camera_from)해
+# 실제로 있을 수 있는 폰 배치인지 본다. 데이터로 고른 값이 아니라 물리 범위다.
+# 근거 (eval/gate_analysis.py, 1008·1103, 세션 300회 x 5개 앵커 설정): 처음 보는 1008에서 기존 판정을 통과한
+# 틀린 해 808회(먼 쪽 약 5 m)는 모두 코트를 한 방향으로 늘린 해(두 축 비 1.28~1.46)라 전부 걸리고,
+# 1103의 맞는 통과 2072회는 하나도 잃지 않았다. 정답 캘리브레이션 4개: 비 <= 1.07, 높이 2.5~2.8 m, 화각 54~69도.
+# (auto_init.plausible의 비 상한 1.25는 틀린 해 1.28에 너무 가까워 쓰지 않는다.)
+CAMERA_MAX_LOG_RATIO = 0.18  # 두 축 스케일 비 1.2 이내
+CAMERA_HEIGHT_M = (1.0, 5.0)  # 삼각대 위의 폰
+CAMERA_HFOV_DEG = (45.0, 90.0)  # 폰 기본(비광각) 렌즈
 
 _model = None
 
@@ -121,12 +130,43 @@ def keypoint_calibrate_video(source, half, spec=DEFAULT_SPEC, times=None, n_wind
         r["t_sec"] = float(t)
         log(f"  t={float(t):8.1f}: {r['status']} 일치율={r['confidence']:.2f} 지점 {r.get('n_near', 0)}+{r.get('n_far', 0)}")
         results.append(r)
-    lead, members = consensus(results, spec)
+    lead, members, status = decide(results, spec)
     public = [{k: v for k, v in r.items() if not k.startswith("_") and not k.startswith("H_")} for r in results]
     if lead is None:
         return {"status": "failed", "method": "keypoint", "votes": 0, "windows": len(results), "H_near": None, "H_far": None,
                 "confidence": 0.0, "details": public}
     best = results[lead]
-    ok = len(members) * 2 > len(results) and best["confidence"] >= ACCEPT_SCORE
-    return {**{k: v for k, v in best.items() if not k.startswith("_")}, "status": "ok" if ok else "low_confidence",
+    return {**{k: v for k, v in best.items() if not k.startswith("_")}, "status": status,
             "method": "keypoint", "votes": len(members), "windows": len(results), "details": public}
+
+
+def camera_check(r, spec=DEFAULT_SPEC):
+    """자동 결과 r(_G: 동쪽 기준 코트 -> 이미지, _size)이 물리적으로 가능한 카메라인가. (통과 여부, 이유 또는 None)."""
+    cam = camera_from(r["_G"], r["_size"])
+    if cam is None:
+        return False, "카메라로 분해되지 않음"
+    f, ratio, C = cam
+    hfov = float(np.degrees(2 * np.arctan(r["_size"][0] / 2 / f)))
+    outside = max(-spec.length / 2 - C[0], abs(C[1]) - spec.width / 2)
+    if abs(np.log(ratio)) > CAMERA_MAX_LOG_RATIO:
+        return False, f"두 축 비 {ratio:.2f} (코트를 한 방향으로 늘린 해)"
+    if not CAMERA_HEIGHT_M[0] <= abs(C[2]) <= CAMERA_HEIGHT_M[1]:
+        return False, f"카메라 높이 {abs(C[2]):.1f} m"
+    if outside < 0:
+        return False, "카메라가 코트 안"
+    if not CAMERA_HFOV_DEG[0] <= hfov <= CAMERA_HFOV_DEG[1]:
+        return False, f"화각 {hfov:.0f}도"
+    return True, None
+
+
+def decide(results, spec=DEFAULT_SPEC, check_camera=True):
+    """시점별 keypoint_calibrate(또는 seg_init.seg_calibrate) 결과로 자동 판정: (대표 인덱스 또는 None, 같은 답 무리, status).
+    status ok: 과반이 같은 답을 내고, 대표의 가까운 쪽 흰 선 일치율이 ACCEPT_SCORE 이상이고, 대표가 물리적으로 가능한
+    카메라(camera_check)일 때 / low_confidence / failed. eval/eval_autocal.py가 같은 판정을 시점 부분집합마다 다시 쓴다."""
+    lead, members = consensus(results, spec)
+    if lead is None:
+        return None, [], "failed"
+    ok = len(members) * 2 > len(results) and results[lead]["confidence"] >= ACCEPT_SCORE
+    if ok and check_camera:
+        ok = camera_check(results[lead], spec)[0]
+    return lead, members, "ok" if ok else "low_confidence"

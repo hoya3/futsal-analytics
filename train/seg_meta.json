@@ -1,0 +1,55 @@
+{
+ "arch": "Unet",
+ "encoder": "resnet34",
+ "smp_version": "0.5.0",
+ "torch_version": "2.14.1+cu130",
+ "input_size": [
+  1280,
+  720
+ ],
+ "pad_to": 32,
+ "padded_size": [
+  1280,
+  736
+ ],
+ "color": "RGB",
+ "mean": [
+  0.485,
+  0.456,
+  0.406
+ ],
+ "std": [
+  0.229,
+  0.224,
+  0.225
+ ],
+ "preprocess": "resize to input_size, RGB, (x/255 - mean)/std, zero-pad bottom/right to pad_to multiple",
+ "output": "logits (N, C, H_pad, W_pad); softmax over C, crop [:H, :W]",
+ "names": [
+  "background",
+  "halfway_line",
+  "center_circle",
+  "sideline_left",
+  "sideline_right",
+  "far_goal_line",
+  "near_goal_line",
+  "far_penalty_area",
+  "near_penalty_area",
+  "spots"
+ ],
+ "line_classes": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9
+ ],
+ "ignore_index": 255,
+ "layout": "canonical (1008). calibration mirror:true camera -> flip frame horizontally before, flip output back",
+ "best_epoch": 7,
+ "val_line_miou": 0.48413
+}

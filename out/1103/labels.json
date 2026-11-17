@@ -1,0 +1,258 @@
+{
+ "labels": [
+  {
+   "cam": 1,
+   "t": 300.0,
+   "video": "/mnt/d/02_Projects/\ucea1\uc2a4\ud1a4/1103/20261103_165422_sync-001.mp4",
+   "half": "east",
+   "points": [
+    {
+     "id": "circle_right",
+     "kind": "point",
+     "region": "center",
+     "px": [
+      988.0,
+      268.0
+     ],
+     "world": [
+      0.0,
+      -3.0
+     ]
+    },
+    {
+     "id": "far_10m",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      608.0,
+      232.0
+     ],
+     "world": [
+      10.0,
+      -0.0
+     ]
+    },
+    {
+     "id": "far_arc_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      736.0,
+      198.0
+     ],
+     "world": [
+      20.0,
+      -7.5
+     ]
+    },
+    {
+     "id": "far_arc_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      172.0,
+      210.0
+     ],
+     "world": [
+      20.0,
+      7.5
+     ]
+    },
+    {
+     "id": "far_post_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      538.0,
+      202.0
+     ],
+     "world": [
+      20.0,
+      -1.5
+     ]
+    },
+    {
+     "id": "far_post_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      426.0,
+      204.0
+     ],
+     "world": [
+      20.0,
+      1.5
+     ]
+    },
+    {
+     "id": "left_sideline",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      348.0,
+      602.0
+     ],
+     "curve": "left_sideline"
+    },
+    {
+     "id": "near_arc",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      1882.0,
+      414.0
+     ],
+     "curve": "near_arc"
+    },
+    {
+     "id": "circle_near",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      934.0,
+      297.0
+     ],
+     "curve": "circle"
+    },
+    {
+     "id": "circle_far",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      717.0,
+      264.0
+     ],
+     "curve": "circle"
+    }
+   ],
+   "mirror": true
+  },
+  {
+   "cam": 1,
+   "t": 600.0,
+   "video": "/mnt/d/02_Projects/\ucea1\uc2a4\ud1a4/1103/20261103_165422_sync-001.mp4",
+   "half": "east",
+   "points": [
+    {
+     "id": "circle_right",
+     "kind": "point",
+     "region": "center",
+     "px": [
+      982.0,
+      268.0
+     ],
+     "world": [
+      0.0,
+      -3.0
+     ]
+    },
+    {
+     "id": "far_10m",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      606.0,
+      231.0
+     ],
+     "world": [
+      10.0,
+      -0.0
+     ]
+    },
+    {
+     "id": "far_arc_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      738.0,
+      198.0
+     ],
+     "world": [
+      20.0,
+      -7.5
+     ]
+    },
+    {
+     "id": "far_arc_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      174.0,
+      210.0
+     ],
+     "world": [
+      20.0,
+      7.5
+     ]
+    },
+    {
+     "id": "far_post_right",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      537.0,
+      202.0
+     ],
+     "world": [
+      20.0,
+      -1.5
+     ]
+    },
+    {
+     "id": "far_post_left",
+     "kind": "point",
+     "region": "far",
+     "px": [
+      426.0,
+      204.0
+     ],
+     "world": [
+      20.0,
+      1.5
+     ]
+    },
+    {
+     "id": "left_sideline",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      382.0,
+      656.0
+     ],
+     "curve": "left_sideline"
+    },
+    {
+     "id": "near_arc",
+     "kind": "line",
+     "region": "near",
+     "px": [
+      1870.0,
+      414.0
+     ],
+     "curve": "near_arc"
+    },
+    {
+     "id": "circle_near",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      930.0,
+      298.0
+     ],
+     "curve": "circle"
+    },
+    {
+     "id": "circle_far",
+     "kind": "line",
+     "region": "center",
+     "px": [
+      750.0,
+      261.0
+     ],
+     "curve": "circle"
+    }
+   ],
+   "mirror": true
+  }
+ ]
+}

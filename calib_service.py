@@ -36,6 +36,9 @@ DEFAULT_HALF = {1: "east", 2: "west"}
 MANUAL_MIN_SCORE = 0.6  # 실제 영상의 올바른 캘리브레이션은 0.8 이상
 FAR_ANCHOR_MAX_PX = 15.0  # 먼 쪽 코너 클릭과 결과의 허용 차이: 좌우를 바꿔 찍으면 훨씬 크다
 KEYPOINT_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train", "best.pt")
+# 코트 라인 세그멘테이션 모델 (court_seg.load_seg_model이 읽는 순서): TorchScript, 없으면 state_dict + seg_meta.json
+SEG_MODELS = tuple(os.path.join(os.path.dirname(os.path.abspath(__file__)), "train", name)
+                   for name in ("seg_best.ts", "seg_best.pt"))
 
 
 class SessionError(ValueError):
@@ -114,8 +117,21 @@ def _write_overlay(s, frame, cand, root):
 
 
 def find_court(source, half, spec, times=None, cfg=AutoConfig(), log=lambda *_: None):
-    """자동 인식: 코트 키포인트 모델이 있으면 그것으로(시점당 약 1초), 없으면 카메라 자세 격자 탐색(시점당 약 30초).
-    모델(train/best.pt)은 저장소에 없으므로 학습한 가중치를 넣은 서버에서만 키포인트 방식이 쓰인다."""
+    """자동 인식, 있는 모델 순서대로:
+      1. 코트 라인 세그멘테이션 (train/seg_best.ts, seg_init.seg_calibrate_video): CPU 시점당 약 7초, 첫 시점은 좌우 배치를
+         두 번 풀어 약 15초. 처음 보는 경기(1008)에서도 자동 통과 100%, 틀린 통과 0회 (eval/eval_autocal.py).
+         먼 하프는 8자유도(far_model "free"), 좌우 배치(mirror)는 스스로 정한다.
+      2. 코트 키포인트 (train/best.pt, keypoint_init): 시점당 약 1초. 학습한 경기에서만 믿을 만하다.
+      3. 카메라 자세 격자 탐색: 시점당 약 30초.
+    모델 파일은 저장소에 없으므로 학습한 가중치를 넣은 서버에서만 1, 2가 쓰인다. torch가 없으면 1을 건너뛴다."""
+    if any(os.path.exists(p) for p in SEG_MODELS):
+        try:
+            import torch  # noqa: F401  court_seg가 쓴다
+        except ImportError:
+            log("세그멘테이션 모델이 있지만 torch가 없어 건너뜁니다")
+        else:
+            from seg_init import seg_calibrate_video
+            return seg_calibrate_video(source, half, spec, times, log=log)
     if os.path.exists(KEYPOINT_MODEL):
         from keypoint_init import keypoint_calibrate_video  # ultralytics는 이때만 불러온다
         return keypoint_calibrate_video(source, half, spec, times, log=log)
@@ -141,6 +157,9 @@ def propose(video, cam, spec=DEFAULT_SPEC, half=None, root=DEFAULT_ROOT, times=N
     _write_frame(s, frame, t, root)
     if result["status"] == "ok":
         cand = {"source": "auto", "t_sec": t, "H_near": result["H_near"], "H_far": result["H_far"], "confidence": result["confidence"]}
+        for key in ("far_model", "mirror"):  # 세그멘테이션 결과: 추적(track_camera)과 court_map이 이 값을 쓴다
+            if result.get(key) is not None:
+                cand[key] = result[key]
         s.update(state="needs_review", candidate=cand)
         _write_overlay(s, frame, cand, root)
     _save(s, root)
@@ -254,6 +273,9 @@ def accept(session_id, root=DEFAULT_ROOT, confirm_warnings=False, cfg=TrackConfi
     anchor = dict(cand.get("calibration") or {})
     anchor.update(half=s["half"], video=s["video"], t_sec=cand["t_sec"], spec=s["spec"], source=cand["source"],
                   H_near=cand["H_near"], H_far=cand["H_far"])
+    for key in ("far_model", "mirror"):  # 자동(세그멘테이션) 후보: 먼 하프 8자유도로 추적하고 결과 json에 남긴다
+        if key in cand:
+            anchor[key] = cand[key]
     source = _open_scaled(s["video"])
     try:
         result = track_camera(source, anchor, cfg, log)

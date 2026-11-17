@@ -154,7 +154,22 @@ python topdown.py --photo --lines  # out/topdown_photo.jpg: 실제 영상 합성
 
 합성 지도는 `plot_players.py`의 기본 배경이자 히트맵 배경입니다. 코트 둘레에 1 m 여백이 있으며 좌표 변환은 `topdown.Canvas`가 담당합니다. 시각별 호모그래피를 카메라 화면에서 확인하려면 `python view_calib.py --t 1000` 또는 `--play`를 씁니다.
 
-### 6. 클릭 없는 자동 초기화 (`keypoint_init.py`)
+### 6. 클릭 없는 자동 초기화
+
+`calib_service.find_court`는 있는 모델 순서대로 씁니다: 코트 라인 세그멘테이션(`train/seg_best.ts`) → 코트 키포인트(`train/best.pt`) → 카메라 자세 격자 탐색.
+
+#### 6-1. 라인 세그멘테이션 (`seg_init.py`, 기본)
+
+```python
+from seg_init import seg_calibrate_video
+r = seg_calibrate_video(source, "east")   # {"status", "H_near", "H_far", "mirror", "far_model", "votes", ...}
+```
+
+U-Net(ResNet-34)이 선을 클래스별(하프라인, 서클, 좌/우 사이드라인, 골라인, 페널티 구역, 스폿)로 칠하면, 직선/타원 교점으로 첫 행렬을 풀고 클래스별 ICP와 흰 선 ICP로 다듬습니다. 5개 시점의 다수결 + 흰 선 일치율 0.6 + 카메라 타당성 검사(`keypoint_init.decide`)를 통과해야 `ok`입니다. 좌우 배치(mirror)는 첫 시점에서 두 배치를 다 풀어 정하고(틀린 배치는 클래스 일치율 0.34 이하로 실패), 먼 하프는 8자유도(`far_model: "free"`)로 맞춥니다. CPU에서 약 50초.
+
+평가(`python eval/eval_autocal.py --mode seg --match 1008 1103 --far-model free`, 시점 5개 세션 300회): 학습에 쓰지 않은 1008을 포함해 4대 모두 자동 통과 100%, 틀린 통과 0회. 통과 결과의 오차(중앙값)는 1008 가까운 쪽 0.15~0.17 m, 먼 쪽 0.25~0.32 m, 1103 가까운 쪽 0.02~0.03 m, 먼 쪽 0.05~0.06 m입니다. 학습은 `train/make_seg_dataset.py` → `train/train_court_seg_colab.ipynb`.
+
+#### 6-2. 코트 키포인트 (`keypoint_init.py`)
 
 ```python
 from keypoint_init import keypoint_calibrate
