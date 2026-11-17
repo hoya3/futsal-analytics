@@ -27,9 +27,33 @@ LABELS_PATH = out_path("labels.json")  # 회차별 (out/<FUTSAL_MATCH>/labels.js
 DEFAULT_TIMES = (300.0, 1100.0, 2000.0)
 
 
-def validation_points(spec=DEFAULT_SPEC):
+def _swap_sides(text):
+    return " ".join({"left": "right", "right": "left", "LEFT": "RIGHT", "RIGHT": "LEFT"}.get(w.rstrip(","), w.rstrip(","))
+                    + ("," if w.endswith(",") else "") for w in text.split())
+
+
+def validation_points(spec=DEFAULT_SPEC, mirror=False):
     """동쪽을 바라보는 카메라 기준 좌표의 검증 지점. 7클릭(하프라인 양 끝, 서클 오른쪽 교차, 가까운 10m 지점, 먼 쪽 코너)과 겹치지 않는다.
-    kind "point": 정확한 지점. kind "line": 해당 선 위의 아무 점 (넓은 선은 가운데) - 선까지의 거리로 채점한다."""
+    kind "point": 정확한 지점. kind "line": 해당 선 위의 아무 점 (넓은 선은 가운데) - 선까지의 거리로 채점한다.
+    mirror=True: 보이는 사이드라인이 화면 왼쪽인 배치(1103, calibrate.click_landmarks와 같은 규칙). id의 left/right는 그대로
+    '화면에서 보이는 쪽'이고, 이름의 좌우와 코트 y 부호를 바꾼다. 보이는 사이드라인은 left_sideline(y = +W/2)이 된다."""
+    pts = _validation_points(spec)
+    if not mirror:
+        return pts
+    out = []
+    for lm in pts:
+        lm = {**lm, "name": _swap_sides(lm["name"]), "xy": (lm["xy"][0], -lm["xy"][1])}
+        if lm["id"] == "right_sideline":
+            lm.update(id="left_sideline", curve="left_sideline")
+        elif lm["id"].endswith("_left"):  # id는 화면 기준: 이름의 좌우를 바꿨으므로 id도 화면에서 보이는 쪽으로
+            lm["id"] = lm["id"][:-5] + "_right"
+        elif lm["id"].endswith("_right"):
+            lm["id"] = lm["id"][:-6] + "_left"
+        out.append(lm)
+    return out
+
+
+def _validation_points(spec=DEFAULT_SPEC):
     L2, W2, r, g, p = spec.length / 2, spec.width / 2, spec.center_r, spec.goal_w / 2, spec.penalty_r
     arc = np.radians(45)
     return [
@@ -54,6 +78,8 @@ def curve_points(name, half, spec=DEFAULT_SPEC):
     L2, W2 = spec.length / 2, spec.width / 2
     if name == "right_sideline":
         polys = [np.array([[-L2, -W2], [L2, -W2]])]
+    elif name == "left_sideline":  # 반전 배치(mirror)에서 보이는 사이드라인
+        polys = [np.array([[-L2, W2], [L2, W2]])]
     elif name == "near_arc":
         polys = lines[6:9]  # 동쪽 기준에서 카메라 쪽(x<0) 골대의 호와 앞쪽 직선
     elif name == "circle":
@@ -64,7 +90,7 @@ def curve_points(name, half, spec=DEFAULT_SPEC):
     return dense if half == "east" else -dense
 
 
-def make_label(cam, t, video, half, points, clicks):
+def make_label(cam, t, video, half, points, clicks, mirror=False):
     """찍은 결과를 저장 형식으로. 건너뛴 지점(None)은 뺀다."""
     out = []
     for lm, px in zip(points, clicks):
@@ -76,7 +102,10 @@ def make_label(cam, t, video, half, points, clicks):
         else:
             item["curve"] = lm["curve"]
         out.append(item)
-    return {"cam": cam, "t": float(t), "video": video, "half": half, "points": out}
+    label = {"cam": cam, "t": float(t), "video": video, "half": half, "points": out}
+    if mirror:
+        label["mirror"] = True
+    return label
 
 
 def read_labels(path=LABELS_PATH):
@@ -96,9 +125,10 @@ def write_labels(labels, path=LABELS_PATH):
 class Labeler(Calibrator):
     """5클릭 창의 미니맵과 돋보기를 재사용한다. 호모그래피는 풀지 않는다."""
 
-    def __init__(self, frame, half, spec):
+    def __init__(self, frame, half, spec, mirror=False):
         super().__init__(frame, half, spec)
-        self.lms = [dict(lm, halves=()) for lm in validation_points(spec)]
+        self.mirror = mirror  # 캘리브레이션의 배치를 따른다 (미니맵 문구도 이것을 쓴다)
+        self.lms = [dict(lm, halves=()) for lm in validation_points(spec, mirror)]
 
     def _solve(self):
         pass
@@ -121,7 +151,7 @@ class Labeler(Calibrator):
 
 def label_frame(n, cal, source, t, spec):
     """프레임 한 장을 라벨링한다. 저장하면 라벨 dict, q면 None."""
-    tool = Labeler(median_of(source, t), cal["half"], spec)
+    tool = Labeler(median_of(source, t), cal["half"], spec, bool(cal.get("mirror")))
     tool.t = t
     win = f"validation points cam{n}"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
@@ -153,7 +183,7 @@ def label_frame(n, cal, source, t, spec):
             return None
         elif key == 13 and tool.done:
             cv2.destroyWindow(win)
-            return make_label(n, tool.t, cal["video"], cal["half"], tool.lms, tool.clicks)
+            return make_label(n, tool.t, cal["video"], cal["half"], tool.lms, tool.clicks, tool.mirror)
 
 
 def main():

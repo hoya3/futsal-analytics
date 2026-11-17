@@ -1051,3 +1051,31 @@ def test_free_far_model_blends_across_halfway_and_shared_is_unchanged():
     step_shared = np.linalg.norm(pixel_to_court(shared, px_at(0.01)) - pixel_to_court(shared, px_at(-0.01)), axis=1).max()
     assert step_free < 0.05 < step_shared
     assert np.allclose(pixel_to_court({**shared, "far_blend_m": 9.0}, px_at(3.0)), pixel_to_court(shared, px_at(3.0)))
+
+
+def test_mirrored_validation_points_match_the_screen_side_and_score_zero():
+    """1103처럼 보이는 사이드라인이 화면 왼쪽인 배치: 이름/id의 left는 화면 왼쪽에 투영되고, 보이는 사이드라인은
+    left_sideline이며, 정답 위치를 찍은 라벨은 오차 0으로 채점된다."""
+    import label_points as lp
+    import score_points as sp
+
+    pts = {p["id"]: p for p in lp.validation_points(mirror=True)}
+    assert "left_sideline" in pts and "right_sideline" not in pts
+    assert pts["left_sideline"]["curve"] == "left_sideline"
+    for base in ("far_arc", "far_post"):
+        left = project(G, np.array([pts[f"{base}_left"]["xy"]]))[0][0]
+        right = project(G, np.array([pts[f"{base}_right"]["xy"]]))[0][0]
+        assert left[0] < right[0] and "left" in pts[f"{base}_left"]["name"]
+    sideline_px = project(G, np.array([pts["left_sideline"]["xy"]]))[0][0]
+    assert sideline_px[0] < project(G, np.array([[-16.0, -10.0]]))[0][0][0]  # 보이는 쪽 = 화면 왼쪽(y = +10)
+    assert (lp.curve_points("left_sideline", "east")[:, 1] == 10).all()
+    assert (lp.curve_points("left_sideline", "west")[:, 1] == -10).all()
+
+    lms = lp.validation_points(mirror=True)
+    clicks = [project(G, np.array([lm["xy"]]))[0][0] for lm in lms]
+    label = lp.make_label(1, 5.0, "v.mp4", "east", lms, clicks, mirror=True)
+    assert label["mirror"] is True
+    cal = {"half": "east", "H_near": H_NEAR.tolist(), "H_far": H_NEAR.tolist()}
+    errors = [r["error"] for r in sp.score([label], lambda n: cal)]
+    assert len(errors) == len(lms) and max(errors) < 0.05
+    assert lp.validation_points() == lp._validation_points()  # 기본(반전 없음)은 그대로
