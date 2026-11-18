@@ -1352,3 +1352,42 @@ def test_auto_match_virtual_clicks_reproject_exactly(monkeypatch, tmp_path):
         assert "segments" not in anchor and anchor["clicks"] == "virtual" and anchor["far_model"] == "free"
         with open(paths["calib"], encoding="utf-8") as f:
             assert json.load(f)["segments"] == cal["segments"]
+
+
+def test_auto_match_sync_record_round_trips_through_court_map_and_team_offsets(monkeypatch, tmp_path):
+    import auto_match
+    import court_map
+
+    monkeypatch.setattr(auto_match.cv2, "VideoCapture", lambda path: _FakeCap(3000 if "a" in os.path.basename(path) else 2900))
+    monkeypatch.setattr(auto_match, "frames_of", lambda path: 0)
+    for offset in (12.5, -7.25):  # cam1 시각 = cam2 시각 + offset
+        rec = auto_match.sync_record({1: str(tmp_path / "20261120_100000a.mp4"), 2: str(tmp_path / "20261120_100012b.mp4")},
+                                     offset, {"method": "test"})
+        s = {int(n): rec["videos"][name]["source_time_of_output_0_s"] for n, name in rec["cameras"].items()}
+        assert min(s.values()) == 0.0 and s[1] - s[2] == pytest.approx(offset)  # 팀 trackview: 원본끼리 시간 차 = 두 값의 차
+        assert rec["cameras"]["1"] == "20261120_100000a_sync.mp4" and all(v["virtual"] for v in rec["videos"].values())
+        # 원본 시각의 보정 -> court_map.load가 사본 시각으로 옮긴다 (같은 순간 = 사본 시각 0)
+        out = tmp_path / f"m{offset}"
+        os.makedirs(out)
+        for n in (1, 2):
+            cal = {"half": "east", "video": str(tmp_path / ("20261120_100000a.mp4" if n == 1 else "20261120_100012b.mp4")),
+                   "t_sec": 100.0, "H_near": np.eye(3).tolist(), "H_far": np.eye(3).tolist(), "version": 2,
+                   "segments": [{"t0": 0.0, "t1": 200.0, "source": "auto", "H_near": np.eye(3).tolist(),
+                                 "H_far": np.eye(3).tolist()}]}
+            with open(out / f"calib_cam{n}.json", "w", encoding="utf-8") as f:
+                json.dump(cal, f)
+        with open(out / "sync.json", "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        for n in (1, 2):
+            assert court_map.load(n, str(out))["t_sec"] == pytest.approx(100.0 - s[n])
+
+
+class _FakeCap:
+    def __init__(self, frames):
+        self.frames = frames
+
+    def get(self, prop):
+        return {cv2.CAP_PROP_FRAME_COUNT: self.frames, cv2.CAP_PROP_FPS: 10.0}.get(prop, 0)
+
+    def release(self):
+        pass

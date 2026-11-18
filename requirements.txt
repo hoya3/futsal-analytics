@@ -2,3 +2,4 @@ numpy==2.5.4
 opencv-python==5.0.0.93
 scipy==1.18.1
 pytest==9.2.0
+imageio-ffmpeg==0.8.1  # auto_match.py: 소리로 두 카메라 시간 차 (PATH에 ffmpeg가 없을 때)

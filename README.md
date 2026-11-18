@@ -158,6 +158,18 @@ python topdown.py --photo --lines  # out/topdown_photo.jpg: 실제 영상 합성
 
 `calib_service.find_court`는 있는 모델 순서대로 씁니다: 코트 라인 세그멘테이션(`train/seg_best.ts`) → 코트 키포인트(`train/best.pt`) → 카메라 자세 격자 탐색.
 
+**새 경기를 명령 하나로** (`auto_match.py`): 영상 2개 → 두 카메라 자동 인식 → 오버레이 확인·승인 → 경기 전체 추적(두 카메라 동시) → 소리로 두 카메라 시간 차 → `out/<경기>/`의 `calib_cam<N>.json`, `H_cam<N>.json`, `sync.json`. 팀 파이프라인(`futsal.trackview`)이 손대지 않고 읽습니다.
+
+```bash
+python auto_match.py cam1.mp4 cam2.mp4 --match 1120          # 오버레이를 보고 y로 승인
+python auto_match.py cam1.mp4 cam2.mp4 --match 1120 --yes    # 확인 없이 승인
+python auto_match.py cam1.mp4 cam2.mp4 --match 1120 --sync-only   # 시간 차만 다시
+```
+
+- 자동 결과에는 사람이 찍은 점이 없어서, 7클릭 지점을 결과 행렬로 화면에 투영한 가상 클릭(`"clicks": "virtual"`)을 함께 저장합니다(팀 `nearfar`가 클릭 정보를 읽음).
+- 시간 차는 팀 저장소 `futsal.sync.align_segments`(1분 구간마다 소리 맞춤)로 재고, 시작을 맞춘 사본은 만들지 않고 `sync.json`에 가상 사본(`"virtual": true`)으로 적습니다. 소리 기준이라 수십 ms 오차가 있습니다(1008: −0.007 s, 선수 위치 기준 +0.007 s). ffmpeg가 없으면 `pip install imageio-ffmpeg`.
+- 1008로 확인(클릭 0번, 약 15분): 두 카메라 자동 통과, 코트를 놓친 시간 8~9초 / 약 53분, 팀 `main`의 `nearfar`로 읽어 직접 보정과 비교 시 가까운 쪽 0.20 m, 먼 쪽 0.26~0.35 m(중앙값).
+
 #### 6-1. 라인 세그멘테이션 (`seg_init.py`, 기본)
 
 ```python
