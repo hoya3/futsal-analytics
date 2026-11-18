@@ -1322,3 +1322,33 @@ def test_camera_check_accepts_real_calibrations_and_rejects_impossible_cameras()
     assert ki.decide([r_ok] * 5)[2] == "ok"
     assert ki.decide([r_bad] * 5)[2] == "low_confidence"
     assert ki.decide([r_bad] * 5, check_camera=False)[2] == "ok"
+
+
+def test_auto_match_virtual_clicks_reproject_exactly(monkeypatch, tmp_path):
+    from dataclasses import asdict
+
+    import auto_match
+    from calib_core import to_world
+
+    spec = CourtSpec()
+    for half, mirror in (("east", False), ("west", True)):
+        S = np.eye(3) if half == "east" else np.diag([-1.0, -1.0, 1.0])
+        H = np.linalg.inv(G @ S)  # 이미지 -> 실제 코트 (west는 코트를 180도 돌려 본다)
+        cal = {"half": half, "mirror": mirror, "spec": asdict(spec), "video": "v.mp4",
+               "t_sec": 5.0, "H_near": (H / H[2, 2]).tolist(), "H_far": (H / H[2, 2]).tolist(), "source": "auto",
+               "far_model": "free", "version": 2, "segments": [{"t0": 0.0, "t1": 10.0, "source": "auto"}]}
+        names, img_pts, world = auto_match.virtual_clicks(cal, (1920, 1080))
+        assert len(names) == len(img_pts) == 7 and any(p is not None for p in img_pts)
+        Gi = front_facing(np.linalg.inv(np.array(cal["H_near"])))
+        for i, xy in world["near"].items():  # 팀 nearfar.from_team이 하는 재투영: 잔차 0
+            assert np.allclose(project(Gi, np.array([xy]))[0][0], img_pts[int(i)], atol=0.02)
+        assert all(img_pts[int(i)] is not None for region in world.values() for i in region)
+        assert world["near"]["0"] == list(map(float, to_world((0.0, -spec.width / 2 if mirror else spec.width / 2), half)))
+
+        monkeypatch.setattr(auto_match, "video_size", lambda path: (1920, 1080))
+        paths, n_pts = auto_match.write_outputs(cal, str(tmp_path), 1)
+        with open(paths["anchor"], encoding="utf-8") as f:
+            anchor = json.load(f)
+        assert "segments" not in anchor and anchor["clicks"] == "virtual" and anchor["far_model"] == "free"
+        with open(paths["calib"], encoding="utf-8") as f:
+            assert json.load(f)["segments"] == cal["segments"]

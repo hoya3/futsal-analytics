@@ -27,3 +27,7 @@ train/seg_preview/
 train/court_seg_dataset.zip
 # 학습된 분할 모델 (court_seg.py가 읽는 TorchScript, 약 98 MB)
 train/*.ts
+
+# auto_match.py: 추적 진행 기록, 세션 기록(이 PC의 영상 경로)
+out/*/auto_track_cam*.log
+out/*/auto_match.json
