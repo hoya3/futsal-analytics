@@ -258,6 +258,23 @@ def _to_original(H, scale):
     return (out / out[2, 2]).tolist()
 
 
+def _result_to_original(result, scale):
+    """track_camera 결과(작업 해상도)를 원본 영상 픽셀 기준으로 바꾼다. 행렬뿐 아니라 픽셀 단위 값(클릭 img_pts,
+    구간의 shift, drift [t, dx, dy])도 함께 바꿔야 court_map / track.py --refit-far가 원본 픽셀에서 맞게 쓴다."""
+    inv = 1.0 / scale
+    if result.get("img_pts"):
+        result["img_pts"] = [None if p is None else [p[0] * inv, p[1] * inv] for p in result["img_pts"]]
+    for holder in [result] + result["segments"]:
+        if holder.get("H_near") is not None:
+            holder["H_near"], holder["H_far"] = _to_original(holder["H_near"], scale), _to_original(holder["H_far"], scale)
+    for seg in result["segments"]:
+        if seg.get("shift"):
+            seg["shift"] = [v * inv for v in seg["shift"]]
+        if seg.get("drift"):
+            seg["drift"] = [[t, dx * inv, dy * inv] for t, dx, dy in seg["drift"]]
+    return result
+
+
 def _result_path(s, root):
     return os.path.join(_dir(s["id"], root), f"calib_cam{s['cam']}.json")
 
@@ -282,10 +299,7 @@ def accept(session_id, root=DEFAULT_ROOT, confirm_warnings=False, cfg=TrackConfi
     except ValueError as e:
         raise SessionError(f"후보로 추적을 시작할 수 없습니다: {e}") from e
 
-    scale = s["scale"]
-    for holder in [result] + result["segments"]:
-        if holder.get("H_near") is not None:
-            holder["H_near"], holder["H_far"] = _to_original(holder["H_near"], scale), _to_original(holder["H_far"], scale)
+    _result_to_original(result, s["scale"])
     with open(_result_path(s, root), "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
     s.update(state="done", result=_result_path(s, root))

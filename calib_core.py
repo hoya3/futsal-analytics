@@ -84,6 +84,8 @@ def solve_half(img_pts, lms, half, spec=DEFAULT_SPEC):
     img = np.asarray(img_pts, float)
     guess = np.array([to_world(lm["xy"], half) for lm in lms])
     H0, _ = cv2.findHomography(img, guess, 0)
+    if H0 is None or abs(H0[2, 2]) < 1e-12:  # 한 줄 위에 있거나 겹친 클릭: 호출하는 쪽이 ValueError를 사용자 메시지로 바꾼다
+        raise ValueError("클릭 점들로 호모그래피를 만들 수 없습니다 (한 직선 위에 있거나 겹친 점)")
     line_idx = [i for i, lm in enumerate(lms) if lm["kind"] == "line"]
 
     def unpack(p):

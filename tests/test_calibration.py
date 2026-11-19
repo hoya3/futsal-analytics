@@ -1391,3 +1391,29 @@ class _FakeCap:
 
     def release(self):
         pass
+
+
+def test_solve_half_degenerate_clicks_raise_value_error():
+    """한 직선 위의 클릭은 TypeError가 아니라 ValueError (calib_service가 사용자 메시지로 바꾼다)."""
+    lms = click_landmarks()[:5]
+    img = np.array([[100.0, 100.0], [200, 200], [300, 300], [400, 400], [500, 500]])
+    with pytest.raises(ValueError):
+        solve_half(img, lms, "east")
+
+
+def test_result_to_original_keeps_pixel_to_court():
+    """작업 해상도 결과를 원본 픽셀로 바꾼 뒤에도 같은 지점이 같은 코트 좌표로 간다 (drift 포함)."""
+    scale = 0.5  # 4K -> 1080 작업 해상도
+    drift = [[0.0, 0.0, 0.0], [10.0, 3.0, -2.0]]
+    work = {"version": 2, "half": "east", "spec": json.loads(json.dumps(CourtSpec().__dict__)),
+            "H_near": H_NEAR.tolist(), "H_far": H_NEAR.tolist(), "img_pts": [[100.0, 50.0], None],
+            "segments": [{"t0": 0.0, "t1": 10.0, "source": "anchor", "H_near": H_NEAR.tolist(), "H_far": H_NEAR.tolist(),
+                          "shift": [4.0, -6.0], "drift": drift, "score": 1.0}]}
+    work_px = np.array([[900.0, 600.0], [1200.0, 700.0]])
+    expect = pixel_to_court(json.loads(json.dumps(work)), work_px, t=7.0)
+    orig = svc._result_to_original(json.loads(json.dumps(work)), scale)
+    got = pixel_to_court(orig, work_px / scale, t=7.0)
+    assert np.allclose(got, expect, atol=1e-6)
+    assert orig["img_pts"] == [[200.0, 100.0], None]
+    assert orig["segments"][0]["shift"] == [8.0, -12.0]
+    assert orig["segments"][0]["drift"][1] == [10.0, 6.0, -4.0]
