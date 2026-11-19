@@ -13,6 +13,7 @@
   입력: out/H_cam<N>_refined.json (없으면 out/H_cam<N>.json), 그 안의 video 경로
   출력: out/calib_cam<N>.json, 구간별 확인용 out/track_cam<N>_seg<K>.jpg
 """
+import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -483,20 +484,20 @@ def save_previews(source, result, n):
             cv2.imwrite(out_path(f"track_cam{n}_seg{k:02d}.jpg"), view)
 
 
+def parse_args(args):
+    p = argparse.ArgumentParser(description="앵커 캘리브레이션을 경기 전체로 전파 (out/calib_cam<N>.json)")
+    p.add_argument("cams", nargs="*", type=int, choices=(1, 2), help="카메라 번호 (기본: 1 2)")
+    p.add_argument("--step", type=float, default=TrackConfig.step, help=f"샘플 간격 (초, 기본 {TrackConfig.step})")
+    p.add_argument("--far-model", choices=FAR_MODELS, help="먼 하프 모델 (결과에 저장)")
+    p.add_argument("--drift-only", action="store_true", help="기존 구간은 두고 밀림만 다시 잰다")
+    p.add_argument("--refit-far", action="store_true", help="기존 H_near·구간·밀림은 두고 구간마다 H_far만 다시 맞춘다")
+    return p.parse_intermixed_args(args)  # "1 --step 5 2"처럼 옵션 사이의 카메라 번호도 받는다
+
+
 def main(args):
-    drift_only = "--drift-only" in args
-    refit_only = "--refit-far" in args
-    args = [a for a in args if a not in ("--drift-only", "--refit-far")]
-    far_model = None
-    if "--far-model" in args:
-        i = args.index("--far-model")
-        far_model = args[i + 1]
-        if far_model not in FAR_MODELS:
-            raise SystemExit(f"--far-model은 {FAR_MODELS} 중 하나여야 합니다: {far_model}")
-        del args[i:i + 2]
-    step = float(args[args.index("--step") + 1]) if "--step" in args else TrackConfig.step
-    cams = [int(a) for a in args[: args.index("--step")]] if "--step" in args else [int(a) for a in args]
-    for n in cams or (1, 2):
+    a = parse_args(args)
+    drift_only, refit_only, far_model, step = a.drift_only, a.refit_far, a.far_model, a.step
+    for n in a.cams or (1, 2):
         if refit_only:
             with open(out_path(f"calib_cam{n}.json"), encoding="utf-8") as f:
                 result = json.load(f)

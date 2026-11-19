@@ -29,6 +29,8 @@ H_cam<N>.json과 calib_cam<N>.json의 img_pts / world는 사람이 찍은 점이
   ../src (팀 저장소 안의 calibration/)나 ../team/src에서 찾는다. 찾지 못하거나 소리가 없으면 --offset 초로 직접 넣는다.
 """
 import argparse
+import importlib
+import importlib.util
 import json
 import os
 import shutil
@@ -119,21 +121,28 @@ def read_audio(path, rate=SYNC_RATE):
     return np.frombuffer(raw, np.float32)
 
 
+def _load_futsal_sync():
+    """현재 sys.path에서 futsal.sync. 모듈이 없으면 None, 있는데 불러오다 실패하면(빠진 의존성 등) 그 이유로 RuntimeError."""
+    try:
+        if importlib.util.find_spec("futsal") is None or importlib.util.find_spec("futsal.sync") is None:
+            return None
+        return importlib.import_module("futsal.sync")
+    except ImportError as e:  # 모듈은 있는데 그 안의 import가 실패: '찾지 못했다'로 덮지 않는다
+        raise RuntimeError(f"futsal.sync를 찾았지만 불러오지 못했습니다 ({e}). 팀 저장소 requirements를 설치했는지 확인하세요") from e
+
+
 def team_sync():
     """팀 저장소의 futsal.sync 모듈. 설치된 패키지, 또는 ../src, ../team/src. 없으면 None."""
-    try:
-        from futsal import sync
+    sync = _load_futsal_sync()
+    if sync is not None:
         return sync
-    except ImportError:
-        pass
     for src in (os.path.join(HERE, "..", "src"), os.path.join(HERE, "..", "team", "src")):
         if os.path.isfile(os.path.join(src, "futsal", "sync.py")):
             sys.path.insert(0, os.path.abspath(src))
-            try:
-                from futsal import sync
+            sync = _load_futsal_sync()
+            if sync is not None:
                 return sync
-            except ImportError:
-                sys.path.pop(0)
+            sys.path.pop(0)
     return None
 
 
@@ -157,7 +166,8 @@ def measure_offset(video1, video2, log=print):
             "hint_s": hint, "n_used": res.get("n_used"), "n_windows": res.get("n_windows"),
             "stderr_s": res.get("stderr"), "drift_ppm": round(float(res["drift"]) * 1e6, 1),
             "offset_at_cam2_start_s": float(res["offset"])}
-    weak = (res.get("n_used") or 0) < SYNC_MIN_WINDOWS or (res.get("stderr") or 1.0) > SYNC_MAX_STDERR
+    stderr = res.get("stderr")  # 0.0도 정상 값: None일 때만 모르는 것으로 본다
+    weak = (res.get("n_used") or 0) < SYNC_MIN_WINDOWS or stderr is None or stderr > SYNC_MAX_STDERR
     info["warning"] = ("일치하는 구간이 적거나 흩어져 있음: python -m futsal.syncview로 장면을 보고 확인" if weak else None)
     return offset, info
 
@@ -172,12 +182,18 @@ def sync_record(videos, offset, info):
         frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         cap.release()
-        durations[n] = frames / fps if fps else 0.0
+        if fps <= 0 or frames <= 0:
+            raise RuntimeError(f"cam{n} 영상의 길이(fps, 프레임 수)를 읽을 수 없습니다: {path}")
+        durations[n] = frames / fps
     duration = min(durations[n] - shifts[n] for n in videos)
+    if duration <= 0:
+        raise RuntimeError(f"시간 차 {offset:+.1f} s를 맞추면 두 영상이 겹치는 구간이 없습니다")
     for n, path in videos.items():
         name = os.path.basename(path)
         stem = os.path.splitext(name)[0].split("_sync")[0]
         copy = f"{stem}_sync.mp4"
+        if copy in entries:  # 두 카메라 파일 이름이 같으면 sync.json의 표가 서로 덮인다
+            raise RuntimeError(f"두 카메라 영상의 파일 이름이 같습니다 ({name}). 한쪽 이름을 바꿔 다시 실행하세요")
         cameras[str(n)] = copy
         entries[copy] = {"source": name, "source_time_of_output_0_s": round(shifts[n], 4),
                          "duration_s": round(duration, 3), "source_frames": frames_of(path), "virtual": True}
@@ -311,19 +327,20 @@ def main(argv=None):
         jobs = {n: pool.submit(_accept, sid, os.path.join(out_dir, f"auto_track_cam{n}.log")) for n, sid in approved}
         failed = False
         for n, job in jobs.items():
-            try:
+            try:  # 한 카메라가 실패해도(추적이든 결과 저장이든) 다른 카메라 결과는 저장한다
                 with open(job.result(), encoding="utf-8") as f:
                     result = json.load(f)
-            except Exception as e:  # 한 카메라가 실패해도 다른 카메라 결과는 저장한다
-                print(f"cam{n}: 추적 실패: {e}", flush=True)
+                paths, n_pts = write_outputs(result, out_dir, n)
+            except Exception as e:
+                print(f"cam{n}: 추적 또는 결과 저장 실패: {e}", flush=True)
                 failed = True
                 continue
-            paths, n_pts = write_outputs(result, out_dir, n)
             segs = result["segments"]
             lost = sum(s["t1"] - s["t0"] for s in segs if s["source"] == "unresolved")
+            end = segs[-1]["t1"] if segs else 0.0
             state[f"cam{n}"].update(accepted=True, calib=os.path.basename(paths["calib"]))
             print(f"cam{n}: 완료 -> {paths['calib']}, {paths['anchor']} (구간 {len(segs)}개, 코트를 못 찾은 시간 "
-                  f"{lost:.0f}s / {segs[-1]['t1']:.0f}s, 먼 하프 {result.get('far_model', 'shared')}, "
+                  f"{lost:.0f}s / {end:.0f}s, 먼 하프 {result.get('far_model', 'shared')}, "
                   f"좌우 반전 {bool(result.get('mirror'))}, 가상 클릭 {n_pts}/7)", flush=True)
     with open(state_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(state, f, indent=1, ensure_ascii=False)

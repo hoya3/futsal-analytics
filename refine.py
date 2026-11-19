@@ -257,15 +257,17 @@ def refine_camera(d, frame, log=print):
 
 if __name__ == "__main__":
     for n in (1, 2):
-        d = json.load(open(out_path(f"H_cam{n}.json"), encoding="utf-8"))
+        with open(out_path(f"H_cam{n}.json"), encoding="utf-8") as f:
+            d = json.load(f)
         if d.get("source") == "auto":  # 자동 후보는 클릭 앵커가 없고 이미 흰 선에 맞춰져 있다
             print(f"cam{n}: 자동 인식 결과라 건너뜀")
             continue
         if "H_near" not in d:
-            raise SystemExit(out_path(f"H_cam{n}.json is from the old 5-point tool: re-run calibrate.py for cam{n} first"))
+            raise SystemExit(f"{out_path(f'H_cam{n}.json')} is from the old 5-point tool: re-run calibrate.py for cam{n} first")
         frame = cv2.imread(out_path(f"frame_cam{n}.jpg"))
         print(f"cam{n}:")
         r = refine_camera(d, frame)
-        json.dump(r, open(out_path(f"H_cam{n}_refined.json"), "w", encoding="utf-8"), indent=2)
+        with open(out_path(f"H_cam{n}_refined.json"), "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2)
         cv2.imwrite(out_path(f"H_cam{n}_refined_overlay.jpg"),
                     draw_overlay(frame, np.array(r["H_near"]), np.array(r["H_far"]), r["half"], spec_of(r)))

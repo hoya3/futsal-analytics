@@ -18,7 +18,8 @@ def fit_circle(p):
 
 for n in (1, 2):
     suffix = sys.argv[1] if len(sys.argv) > 1 else "_refined"
-    d = json.load(open(out_path(f"H_cam{n}{suffix}.json"), encoding="utf-8"))
+    with open(out_path(f"H_cam{n}{suffix}.json"), encoding="utf-8") as f:
+        d = json.load(f)
     H = np.array(d["H_near"])  # 서클이 하프라인에 걸쳐 있고, 두 호모그래피가 하프라인을 공유한다
     Hc2i = front_facing(np.linalg.inv(H))
     ridge = cv2.GaussianBlur(ridge_map(cv2.imread(out_path(f"frame_cam{n}.jpg"))), (0, 0), 1.5)

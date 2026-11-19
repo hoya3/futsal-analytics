@@ -1417,3 +1417,31 @@ def test_result_to_original_keeps_pixel_to_court():
     assert orig["img_pts"] == [[200.0, 100.0], None]
     assert orig["segments"][0]["shift"] == [8.0, -12.0]
     assert orig["segments"][0]["drift"][1] == [10.0, 6.0, -4.0]
+
+
+def test_auto_match_sync_record_rejects_same_file_names_and_unreadable_fps(monkeypatch, tmp_path):
+    """두 카메라 파일 이름이 같거나 fps를 못 읽으면 sync.json을 조용히 틀리게 쓰지 않고 RuntimeError."""
+    import auto_match
+
+    monkeypatch.setattr(auto_match, "frames_of", lambda path: 0)
+    monkeypatch.setattr(auto_match.cv2, "VideoCapture", lambda path: _FakeCap(3000))
+    with pytest.raises(RuntimeError, match="파일 이름"):
+        auto_match.sync_record({1: str(tmp_path / "a" / "video.mp4"), 2: str(tmp_path / "b" / "video.mp4")}, 1.0, {})
+
+    class NoFps(_FakeCap):
+        def get(self, prop):
+            return 0
+    monkeypatch.setattr(auto_match.cv2, "VideoCapture", lambda path: NoFps(3000))
+    with pytest.raises(RuntimeError, match="fps"):
+        auto_match.sync_record({1: str(tmp_path / "a.mp4"), 2: str(tmp_path / "b.mp4")}, 1.0, {})
+
+
+def test_track_cli_keeps_cameras_around_options():
+    """옵션 사이의 카메라 번호도 받는다 (예전 손 파싱은 '1 --step 5 2'에서 2를 버렸다)."""
+    import track as tr
+
+    a = tr.parse_args(["1", "--step", "5", "2", "--far-model", "free", "--drift-only"])
+    assert a.cams == [1, 2] and a.step == 5.0 and a.far_model == "free" and a.drift_only and not a.refit_far
+    assert tr.parse_args([]).cams == [] and tr.parse_args([]).step == tr.TrackConfig.step
+    with pytest.raises(SystemExit):
+        tr.parse_args(["--far-model", "bogus"])

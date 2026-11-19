@@ -228,7 +228,10 @@ class Source:
             self.cap = cv2.VideoCapture(path)
             if not self.cap.isOpened():
                 raise FileNotFoundError(f"영상을 열 수 없습니다: {path}")
-            self.duration = self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / self.cap.get(cv2.CAP_PROP_FPS)
+            fps = self.cap.get(cv2.CAP_PROP_FPS) or 0.0
+            if fps <= 0:  # 깨졌거나 특이한 컨테이너: 0으로 나누지 않고 '열 수 없음'으로 다룬다
+                raise FileNotFoundError(f"영상의 fps를 읽을 수 없습니다: {path}")
+            self.duration = self.cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
         else:
             self.image = cv2.imread(path)
 
