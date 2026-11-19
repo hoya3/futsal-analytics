@@ -38,22 +38,8 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 from harness import check_purpose, log_usage, read_splits, rel_to_root  # noqa: E402
 
 
-def keypoints(spec=DEFAULT_SPEC):
-    """(이름, 동쪽을 바라보는 카메라 기준 좌표). 사람이 볼 수 있는 코트 표시만 쓴다."""
-    L2, W2, r, g, p = spec.length / 2, spec.width / 2, spec.center_r, spec.goal_w / 2, spec.penalty_r
-    return [
-        ("halfway_left", (0.0, W2)), ("halfway_right", (0.0, -W2)),
-        ("circle_halfway_left", (0.0, r)), ("circle_halfway_right", (0.0, -r)),
-        ("near_10m", (-(L2 - 10.0), 0.0)), ("far_10m", (L2 - 10.0, 0.0)),
-        ("far_corner_left", (L2, W2)), ("far_corner_right", (L2, -W2)),
-        ("far_arc_left", (L2, g + p)), ("far_arc_right", (L2, -(g + p))),
-        ("far_post_left", (L2, g)), ("far_post_right", (L2, -g)),
-        ("near_penalty_front", (-(L2 - p), 0.0)),
-    ]
-
-
-# 좌우 반전 증강에서 서로 바뀌는 지점의 인덱스
-FLIP_IDX = [1, 0, 3, 2, 4, 5, 7, 6, 9, 8, 11, 10, 12]
+# 키포인트 정의는 추론(keypoint_init)과 함께 쓰므로 court_marks에 있다. 여기서도 같은 이름으로 쓴다 (md.keypoints 등)
+from court_marks import FLIP_IDX, keypoints  # noqa: E402,F401
 
 
 def project_keypoints(seg, half, cam, spec=DEFAULT_SPEC, size=(1920, 1080), t=None, match="1008"):

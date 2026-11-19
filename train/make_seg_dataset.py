@@ -40,19 +40,15 @@ sys.path.insert(0, os.path.join(ROOT, "eval"))
 
 import make_dataset as md  # noqa: E402
 from calib_core import HALF_SIGN, Source, front_facing, match_dir  # noqa: E402
-from court import DEFAULT_SPEC, _arc, spec_of  # noqa: E402
+from court import DEFAULT_SPEC, _arc, spec_of  # noqa: E402,F401
 from court_map import blend_width, homographies_at, load  # noqa: E402
+# 클래스와 표시 좌표는 추론(seg_init)과 함께 쓰므로 court_marks에 있다. 여기서도 같은 이름으로 쓴다 (sd.CLS 등)
+from court_marks import CLS, FLIP_CLASS, IGNORE, NAMES, STEP_M, densify, markings  # noqa: E402,F401
 from harness import _git, check_purpose, log_usage, read_splits, rel_to_root  # noqa: E402
 
-NAMES = ["background", "halfway_line", "center_circle", "sideline_left", "sideline_right", "far_goal_line",
-         "near_goal_line", "far_penalty_area", "near_penalty_area", "spots"]
-CLS = {n: i for i, n in enumerate(NAMES)}
-IGNORE = 255
-FLIP_CLASS = {CLS["sideline_left"]: CLS["sideline_right"], CLS["sideline_right"]: CLS["sideline_left"]}
 LINE_WIDTH_M = 0.08  # 칠한 선 폭 (m)
 SPOT_RADIUS_M = 0.1
 MIN_WIDTH_PX = 2  # 저장 해상도(1280 폭)에서 최소 선 굵기
-STEP_M = 0.25  # 선을 이 길이 이하 조각으로 나눠 투영한다 (원근 + 하프 전환)
 HALFWAY_TOL_PX = 1.0  # shared 모델의 하프라인에서 H_near/H_far 투영 차이가 이보다 크면 차이 부분을 무시
 
 # 키포인트 데이터셋에서 뺀 지점(make_dataset.UNRELIABLE) -> 그 지점이 놓인 표시. 두 데이터셋이 같은 근거로 같은 곳을 뺀다.
@@ -64,44 +60,11 @@ KEYPOINT_MARKINGS = {
 }
 
 
-def markings(spec=DEFAULT_SPEC):
-    """(이름, 클래스, 모양, 좌표). 동쪽을 바라보는 카메라 기준 코트 좌표(m). 모양 "line" = 폴리라인, "spot" = 원판 중심.
-    클래스 순서대로 나열한다 (= 칠하는 순서)."""
-    L2, W2, r, g, p = spec.length / 2, spec.width / 2, spec.center_r, spec.goal_w / 2, spec.penalty_r
-    far_pa = np.vstack([_arc(L2, g, p, 90, 180), _arc(L2, -g, p, 180, 270)])  # (L2, g+p) -> 앞쪽 직선 -> (L2, -g-p)
-    near_pa = np.vstack([_arc(-L2, -g, p, 270, 360), _arc(-L2, g, p, 0, 90)])
-    return [
-        ("halfway_line", 1, "line", np.array([[0.0, -W2], [0.0, W2]])),
-        ("center_circle", 2, "line", _arc(0, 0, r, 0, 360, 160)),
-        ("sideline_left", 3, "line", np.array([[-L2, W2], [L2, W2]])),
-        ("sideline_right", 4, "line", np.array([[-L2, -W2], [L2, -W2]])),
-        ("far_goal_line", 5, "line", np.array([[L2, -W2], [L2, W2]])),
-        ("near_goal_line", 6, "line", np.array([[-L2, -W2], [-L2, W2]])),
-        ("far_penalty_area", 7, "line", far_pa),
-        ("near_penalty_area", 8, "line", near_pa),
-        ("center_spot", 9, "spot", np.array([0.0, 0.0])),
-        ("far_6m_spot", 9, "spot", np.array([L2 - 6.0, 0.0])),
-        ("near_6m_spot", 9, "spot", np.array([-(L2 - 6.0), 0.0])),
-        ("far_10m_spot", 9, "spot", np.array([L2 - 10.0, 0.0])),
-        ("near_10m_spot", 9, "spot", np.array([-(L2 - 10.0), 0.0])),
-    ]
-
-
 def unreliable_markings(match, cam):
     names = set()
     for kp in md.UNRELIABLE.get(match, {}).get(cam, set()):
         names |= KEYPOINT_MARKINGS.get(kp, set())
     return names
-
-
-def densify(line, step=STEP_M):
-    """폴리라인을 step 이하 조각으로. 조각 수를 짝수로 해 대칭인 선(사이드라인)은 x=0에 꼭짓점이 오게 한다."""
-    out = [line[:1]]
-    for a, b in zip(line[:-1], line[1:]):
-        k = max(int(math.ceil(np.linalg.norm(b - a) / step)), 1)
-        k += k % 2
-        out.append(a + (b - a) * np.linspace(0, 1, k + 1)[1:, None])
-    return np.vstack(out)
 
 
 def _clip(poly, a, b, c):

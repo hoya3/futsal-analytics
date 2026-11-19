@@ -26,9 +26,6 @@ eval/eval_autocal.py가 그대로 쓴다.
      confidence = 가까운 쪽 흰 선 일치율 (keypoint_init와 같은 정의라 ACCEPT_SCORE가 그대로 적용된다).
      진단: 찾은 선과 inlier 수, 클래스 픽셀 수, 클래스 ICP 잔차, 먼 쪽 흰 선 일치율, 세그멘테이션 일치율.
 """
-import os
-import sys
-
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
@@ -37,12 +34,10 @@ from scipy.spatial import cKDTree
 from auto_init import ROT180
 from calib_core import HALF_SIGN, front_facing, in_half
 from court import DEFAULT_SPEC
+from court_marks import CLS, FLIP_CLASS, NAMES, densify, markings
 from refine import (CIRCLE_PAD, FAR_ANCHOR_W, FAR_MARGIN, RADII, icp_align, icp_align_far, icp_align_far_free,
                     project, ridge_map, sample_model)
 from track import line_score
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "train"))
-from make_seg_dataset import CLS, FLIP_CLASS, NAMES, densify, markings  # noqa: E402
 
 CONF_MIN = 0.5  # 이보다 낮은 확률의 픽셀은 배경으로 본다
 MIN_PIXELS = 40  # 클래스를 쓰는 최소 픽셀 수 (1080p)
