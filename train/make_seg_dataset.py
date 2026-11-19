@@ -284,8 +284,8 @@ def camera_frames(job):
     디코더로 뽑아 같은 프레임인데도 색이 달라(픽셀 평균 차 18) 회차마다 색이 다른 데이터가 된다."""
     m, n, out = job["match"], job["cam"], job["out"]
     cal = load(n, match_dir(m))
-    if "segments" not in cal:
-        raise SystemExit(f"{m} cam{n}: 시간별 캘리브레이션이 없습니다 (FUTSAL_MATCH={m} python track.py {n})")
+    if "segments" not in cal:  # main이 미리 확인한다. SystemExit은 Pool 작업자가 잡지 못해 전체가 멈추므로 RuntimeError
+        raise RuntimeError(f"{m} cam{n}: 시간별 캘리브레이션이 없습니다 (FUTSAL_MATCH={m} python track.py {n})")
     spec, mirror, blend = spec_of(cal), bool(cal.get("mirror")), blend_width(cal)
     source = Source(cal["video"])
     fw, fh = int(source.cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(source.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -354,8 +354,8 @@ def main():
             role = "val" if m in splits["val"] else "train"
             check_purpose(m, role, splits)
             purpose[m] = split_of_match[m] = role
-    if os.path.exists(a.out):
-        shutil.rmtree(a.out)
+    md.require_timelines(a.matches)  # 작업자 프로세스 안에서 실패하면 Pool이 멈추므로, 시작 전에 확인
+    md.clear_dataset_dir(a.out, ("images", "masks", "classes.json"))
     for s in ("train", "val"):
         os.makedirs(os.path.join(a.out, "images", s))
         os.makedirs(os.path.join(a.out, "masks", s))

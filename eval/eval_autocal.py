@@ -79,10 +79,12 @@ def segment_at(cal, t):
 
 
 def pool_times(cal, duration, n):
-    """영상 15~90% 구간에 고르게, 정답 구간이 확정된 시점만."""
+    """영상 15~90% 구간에 고르게, 정답 구간이 확정된 시점만. 중앙값 창(t ~ t+WINDOW) 전체가 한 구간이어야 한다:
+    창 안에서 카메라가 움직였으면 프레임은 두 자세가 섞이고 정답 행렬은 한쪽 구간 것이라 틀린 채점이 된다."""
     out = []
     for t in np.linspace(duration * 0.15, duration * 0.9, n * 3):
-        if segment_at(cal, t) is not None and segment_at(cal, t + WINDOW) is not None:
+        seg = segment_at(cal, t)
+        if seg is not None and segment_at(cal, t + WINDOW) is seg:
             out.append(float(round(t, 1)))
     idx = np.linspace(0, len(out) - 1, min(n, len(out))).astype(int) if out else []
     return [out[i] for i in idx]

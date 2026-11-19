@@ -51,8 +51,8 @@ def main(args):
         src = Source(cal["video"])
         results, valid_times = [], []
         for t in TIMES:
-            seg = truth_segment(cal, t) and truth_segment(cal, t + 12)
-            if seg is None:
+            seg = truth_segment(cal, t)  # median_of는 t ~ t+12 s 프레임: 창 전체가 한 구간일 때만 그 구간이 정답
+            if seg is None or truth_segment(cal, t + 12) is not seg:
                 continue
             frame = median_of(src, t)
             t0 = time.time()

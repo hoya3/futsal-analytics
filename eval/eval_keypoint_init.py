@@ -69,8 +69,8 @@ def main(args):
         src = Source(cal["video"])
         near_med, far_med, fails, val_near = [], [], 0, []
         for t in TIMES:
-            seg = resolved(cal, t) and resolved(cal, t + 12)
-            if seg is None:
+            seg = resolved(cal, t)  # median_of는 t ~ t+12 s 프레임: 창 전체가 한 구간일 때만 그 구간이 정답
+            if seg is None or resolved(cal, t + 12) is not seg:
                 continue
             frame = median_of(src, t)
             t0 = time.time()

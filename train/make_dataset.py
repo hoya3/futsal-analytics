@@ -125,6 +125,27 @@ def draw_preview(frame, kp, names):
     return view
 
 
+def clear_dataset_dir(path, expected):
+    """데이터셋 폴더 path를 비운다. 이 스크립트가 만드는 항목(expected)만 들어 있을 때만 지우고, 다른 것이 있으면 멈춘다.
+    --out을 잘못 줘서(예: --out train) git에 없는 학습 모델(*.pt, *.ts)까지 지우는 일을 막는다."""
+    if not os.path.exists(path):
+        return
+    if not os.path.isdir(path):
+        raise SystemExit(f"--out이 폴더가 아닙니다: {path}")
+    other = sorted(set(os.listdir(path)) - set(expected))
+    if other:
+        raise SystemExit(f"{path}에 데이터셋이 아닌 항목이 있어 지우지 않습니다 ({', '.join(other[:5])}). "
+                         "빈 폴더나 새 경로를 --out으로 주세요")
+    shutil.rmtree(path)
+
+
+def require_timelines(matches):
+    """모든 회차·카메라에 시간별 캘리브레이션(track.py 결과)이 있는지, 기존 데이터셋을 지우기 전에 확인한다."""
+    for m, n in [(m, n) for m in matches for n in (1, 2)]:
+        if "segments" not in load(n, match_dir(m)):
+            raise SystemExit(f"{m} cam{n}: 시간별 캘리브레이션이 없습니다 (FUTSAL_MATCH={m} python track.py {n})")
+
+
 def main():
     p = argparse.ArgumentParser(description="코트 키포인트 데이터셋 생성")
     p.add_argument("--step", type=float, default=3.0, help="샘플 간격 (s)")
@@ -138,8 +159,8 @@ def main():
     a.matches = a.matches or list(splits["train"])
     for m in a.matches:
         check_purpose(m, "train", splits)
-    if os.path.exists(a.out):
-        shutil.rmtree(a.out)
+    require_timelines(a.matches)
+    clear_dataset_dir(a.out, ("images", "labels", "data.yaml"))
     for s in ("train", "val"):
         os.makedirs(os.path.join(a.out, "images", s))
         os.makedirs(os.path.join(a.out, "labels", s))

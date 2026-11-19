@@ -1445,3 +1445,33 @@ def test_track_cli_keeps_cameras_around_options():
     assert tr.parse_args([]).cams == [] and tr.parse_args([]).step == tr.TrackConfig.step
     with pytest.raises(SystemExit):
         tr.parse_args(["--far-model", "bogus"])
+
+
+def test_clear_dataset_dir_refuses_foreign_files(tmp_path):
+    """--out을 잘못 줘도 데이터셋이 아닌 파일(학습 모델 등)이 있는 폴더는 지우지 않는다."""
+    import make_dataset as md
+
+    ds = tmp_path / "dataset"
+    (ds / "images" / "train").mkdir(parents=True)
+    (ds / "data.yaml").write_text("x", encoding="utf-8")
+    md.clear_dataset_dir(str(ds), ("images", "labels", "data.yaml"))
+    assert not ds.exists()
+    md.clear_dataset_dir(str(ds), ("images",))  # 없는 폴더: 아무것도 안 함
+
+    train = tmp_path / "train"
+    (train / "images").mkdir(parents=True)
+    (train / "best.pt").write_bytes(b"weights")
+    with pytest.raises(SystemExit, match="best.pt"):
+        md.clear_dataset_dir(str(train), ("images", "labels", "data.yaml"))
+    assert (train / "best.pt").exists()
+
+
+def test_eval_pool_times_skip_windows_spanning_a_camera_move():
+    """중앙값 창(t ~ t+WINDOW) 안에 구간 경계가 있으면 정답 행렬이 다른 구간 것이라 평가 시점에서 뺀다."""
+    import eval_autocal as ea
+
+    eye = np.eye(3).tolist()
+    cal = {"segments": [{"t0": 0.0, "t1": 500.0, "source": "auto", "H_near": eye, "H_far": eye},
+                        {"t0": 500.0, "t1": 1000.0, "source": "auto", "H_near": eye, "H_far": eye}]}
+    times = ea.pool_times(cal, 1000.0, 200)
+    assert times and not any(t < 500.0 < t + ea.WINDOW for t in times)
