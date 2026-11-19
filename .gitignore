@@ -31,3 +31,6 @@ train/*.ts
 # auto_match.py: 추적 진행 기록, 세션 기록(이 PC의 영상 경로)
 out/*/auto_track_cam*.log
 out/*/auto_match.json
+
+# auto_match.py를 시험으로 돌린 결과 (--match autotest*)
+out/autotest*/
