@@ -16,6 +16,7 @@ from auto_init import auto_calibrate, consensus, median_of  # noqa: E402
 from calib_core import HALF_SIGN, Source  # noqa: E402
 from court import spec_of  # noqa: E402
 from court_map import homographies_at, load  # noqa: E402
+from harness import log_eval  # noqa: E402
 
 TIMES = tuple(range(200, 3200, 200))  # 15개 시점
 
@@ -45,6 +46,7 @@ def error_m(H_auto, H_true, half, spec, size=(1920, 1080)):
 
 def main(args):
     cams = [int(args[args.index("--cam") + 1])] if "--cam" in args else [1, 2]
+    log_eval("eval_auto", cams)  # G4: 결과만 본다 (설정을 고르지 않음), eval/usage_log.jsonl
     for n in cams:
         cal = load(n)
         spec = spec_of(cal)

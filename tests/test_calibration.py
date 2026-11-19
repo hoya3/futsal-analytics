@@ -1498,3 +1498,34 @@ def test_eval_autocal_refuses_to_overwrite_result_with_other_settings(tmp_path):
     path.write_text(json.dumps({"settings": vars(a)}), encoding="utf-8")
     assert ea.settings_diff(str(path), a) == ""  # 같은 설정
     assert ea.settings_diff(str(path), SimpleNamespace(**{**vars(a), "runs": 10})) == "runs 300 -> 10"
+
+
+def test_val_match_cannot_be_used_for_tuning():
+    """G4: 검증 회차(1008)로는 설정·문턱을 고르지 않는다. 결과만 보는 실행은 val, 학습 회차는 report."""
+    import harness as hz
+
+    assert hz.eval_purpose("1008") == "val" and hz.eval_purpose("1103") == "report"
+    assert hz.eval_purpose("1008", tuning=True) == "tune"
+    with pytest.raises(SystemExit, match="1008"):
+        hz.use_match("1008", "tune", [])  # 기록 전에 멈춘다
+
+
+def test_eval_autocal_setting_flags_count_as_tuning():
+    from types import SimpleNamespace
+
+    import eval_autocal as ea
+
+    base = dict(anchor_w=None, far_anchor_w=None, radii=None, far_model=None, seg_noise="")
+    assert not ea.is_tuning(SimpleNamespace(**base))
+    assert not ea.is_tuning(SimpleNamespace(**{**base, "seg_noise": "grow=2"}))  # 시험 조건이지 설정 실험이 아님
+    for k, v in (("anchor_w", 10.0), ("far_anchor_w", 30.0), ("radii", [8, 5]), ("far_model", "free")):
+        assert ea.is_tuning(SimpleNamespace(**{**base, k: v})), k
+
+
+def test_gate_analysis_tunes_only_on_train_matches():
+    import gate_analysis as ga
+
+    splits = {"train": ["1103"], "tune": [], "val": ["1008"], "blind": []}
+    assert ga.split_matches(["1008", "1103"], splits) == (["1103"], ["1008"])
+    with pytest.raises(SystemExit):
+        ga.split_matches(["1008"], splits)  # 검증 회차만 있으면 문턱을 고를 수 없다

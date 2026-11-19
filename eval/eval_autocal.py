@@ -22,8 +22,10 @@
 사용법:
   python eval/eval_autocal.py --mode oracle            (모델 없이 지금 돌릴 수 있다)
   python eval/eval_autocal.py --mode model oracle --match 1008 1103 --pool 15 --runs 300
-  python eval/eval_autocal.py --mode model --match 1008 --anchor-w 10 --far-anchor-w 30 --radii 100,60,40,25,18,12,8,5,3,3
-  (앵커 비중·반경 실험. 결과 파일 이름에 설정이 붙는다: out/autocal_model_1008_aw10_faw30_r100-....json)
+  python eval/eval_autocal.py --mode model --match 1103 --anchor-w 10 --far-anchor-w 30 --radii 100,60,40,25,18,12,8,5,3,3
+  (앵커 비중·반경 실험. 결과 파일 이름에 설정이 붙는다: out/autocal_model_1103_aw10_faw30_r100-....json)
+  설정 실험(--anchor-w, --far-anchor-w, --radii, --far-model)은 조율이라 검증 회차(1008)에는 쓸 수 없다 (eval/splits.json).
+  고른 설정을 기본값으로 바꾼 뒤 옵션 없이 1008에서 확인한다. 실행마다 eval/usage_log.jsonl에 남는다.
   python eval/eval_autocal.py --mode segoracle seg --match 1008 1103 --pool 15 --runs 300
   (seg 모드에서 --anchor-w / --far-anchor-w / --radii는 seg_init의 SEG_ANCHOR_W / SEG_FAR_ANCHOR_W / SEG_RADII를 바꾼다)
 model 모드의 키포인트 검출은 out/<회차>/cache_autocal/detect_<모델>_<수정시각>.json에 저장해 다시 쓴다 (--no-detect-cache).
@@ -56,6 +58,7 @@ from calib_core import HALF_SIGN, Source, front_facing, match_dir, to_world  # n
 from court import spec_of  # noqa: E402
 from court_map import blend_width, homographies_at, load  # noqa: E402
 from eval_keypoint_init import region_error  # noqa: E402
+from harness import check_purpose, eval_purpose, read_splits, use_match  # noqa: E402
 from label_points import read_labels  # noqa: E402
 from make_dataset import keypoints  # noqa: E402
 from score_points import score, summarize  # noqa: E402
@@ -536,6 +539,13 @@ def main():
     if model is not None and not a.no_detect_cache:
         DETECT_CACHE = DetectCache()
     suffix = variant_suffix(a)
+    tuning = is_tuning(a)
+    for match in a.match:  # G4: 설정 실험은 검증 회차(1008)로 하지 않는다. 오래 돌기 전에 확인
+        try:
+            check_purpose(match, eval_purpose(match, tuning), read_splits())
+        except ValueError as e:
+            raise SystemExit(f"{e}: {', '.join(TUNING_FLAGS)}는 설정 실험이라 학습 회차로 하세요 "
+                             f"(예: --match {' '.join(read_splits().get('train', []))})") from e
     if not a.force:  # 오래 도는 기준 결과(예: --runs 300)를 짧은 시험 실행이 몰래 덮어쓰지 않게, 시작 전에 확인
         for mode in modes:
             extra = seg_noise_suffix(SEG_NOISE) if mode == "segoracle" else ""
@@ -561,6 +571,9 @@ def main():
                                "wrong_near_m": WRONG_NEAR_M, "wrong_far_m": WRONG_FAR_M, "results": results}, f,
                               ensure_ascii=False, indent=1, default=_json_default)
                 print(f"-> {path}")
+                use_match(match, eval_purpose(match, tuning),
+                          [os.path.join(match_dir(match), f"calib_cam{n}.json") for n in a.cams],
+                          {"script": "eval_autocal", "mode": mode, "result": os.path.basename(path)})
     if DETECT_CACHE is not None:
         print(f"검출 캐시: 적중 {DETECT_CACHE.hits}, 새로 검출 {DETECT_CACHE.misses}")
     if SEG_CACHE is not None:
@@ -568,6 +581,13 @@ def main():
 
 
 RESULT_KEYS = ("cams", "pool", "windows", "runs", "noise", "seed")  # 결과 파일 이름에 들어가지 않는 설정
+# 알고리즘 설정을 바꿔 비교하는 옵션: 이 실행은 설정을 고르는 '조율'이라 검증 회차에 쓸 수 없다 (eval/splits.json)
+TUNING_FLAGS = ("--anchor-w", "--far-anchor-w", "--radii", "--far-model")
+
+
+def is_tuning(a):
+    """기본 설정이 아닌 알고리즘 설정으로 돌리는가 (설정 실험). --seg-noise는 모델 결함을 흉내 내는 시험 조건이라 아니다."""
+    return any(getattr(a, f.lstrip("-").replace("-", "_")) is not None for f in TUNING_FLAGS)
 
 
 def settings_diff(path, a):

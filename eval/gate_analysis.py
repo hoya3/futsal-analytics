@@ -36,6 +36,7 @@ from auto_init import ROT180  # noqa: E402
 from calib_core import HALF_SIGN, Source, front_facing, match_dir  # noqa: E402
 from court import spec_of  # noqa: E402
 from court_map import load  # noqa: E402
+from harness import eval_purpose, read_splits, role_of, use_match  # noqa: E402
 from refine import match_lines, project, ridge_map  # noqa: E402
 from track import HIT_THRESHOLD  # noqa: E402
 
@@ -311,6 +312,8 @@ def cmd_solve(a):
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(data, f, ensure_ascii=False, default=float)
             log(f"-> {path}")
+            use_match(match, role_purpose(match), [os.path.join(match_dir(match), f"calib_cam{n}.json") for n in a.cams],
+                      {"script": "gate_analysis solve", "setting": tag})
     log(f"검출 캐시: 적중 {ea.DETECT_CACHE.hits}, 새로 검출 {ea.DETECT_CACHE.misses}")
 
 
@@ -626,6 +629,20 @@ def parse_rule(text):
     return rule
 
 
+def role_purpose(match):
+    """이 분석에서 회차의 목적: 학습/조율 회차는 문턱을 고르는 "tune", 검증 회차는 확인만 하는 "val"."""
+    return "tune" if role_of(match, read_splits()) in ("train", "tune") else eval_purpose(match)
+
+
+def split_matches(present, splits):
+    """(문턱을 고를 회차, 확인만 할 회차). 검증 회차(1008)로는 고르지 않는다 (G4, eval/splits.json)."""
+    tune_ms = [m for m in present if role_of(m, splits) in ("train", "tune")]
+    val_ms = [m for m in present if role_of(m, splits) == "val"]
+    if not tune_ms:
+        raise SystemExit(f"문턱을 고를 학습/조율 회차가 없습니다 (결과에 있는 회차 {present}, eval/splits.json)")
+    return tune_ms, val_ms
+
+
 def cmd_analyze(a):
     tags = [setting_tag(*(float(x) for x in s.split(","))) for s in a.settings]
     cams_by_tag, sessions_by_tag = {}, {}
@@ -643,10 +660,18 @@ def cmd_analyze(a):
         sessions_by_tag[tag] = simulate(cams)
         print(f"{tag}: 준비 {time.time() - t0:.0f}s", flush=True)
     tb = Table(cams_by_tag, sessions_by_tag)
-    sel = {m: tb.match == m for m in ("1008", "1103")}
-    sel["all"] = np.ones(len(tb.rows), bool)
+    present = sorted(set(np.asarray(tb.match).tolist()))
+    tune_ms, val_ms = split_matches(present, read_splits())
+    sel = {m: tb.match == m for m in present}
+    sel["tune"] = np.isin(tb.match, tune_ms)
+    sel["val"] = np.isin(tb.match, val_ms)
     out(f"설정: {', '.join(tags)}. 세션 = eval_autocal과 같은 난수(회차마다 seed 0, 300회, 시점 5개). "
         f"틀림 = 가까운 쪽 > {ea.WRONG_NEAR_M} m 또는 먼 쪽 > {ea.WRONG_FAR_M} m.")
+    out(f"문턱은 학습/조율 회차({', '.join(tune_ms)})에서만 고르고, 검증 회차({', '.join(val_ms) or '없음'})에서는 "
+        "확인만 한다 (eval/splits.json).")
+    for m in present:
+        use_match(m, role_purpose(m), [os.path.join(OUT, f"windows_{tag}.json") for tag in tags],
+                  {"script": "gate_analysis analyze", "settings": tags})
 
     # 1) 시점별 특징 분포
     win_rows = []
@@ -663,7 +688,7 @@ def cmd_analyze(a):
     with open(os.path.join(OUT, "window_features.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(win_rows, f, ensure_ascii=False, indent=0, default=float)
     out("\n## 시점별 특징 분포 (status ok 시점, 모든 설정; 최소 / 중앙 / 최대)")
-    groups = [("1103 맞음", "1103", False), ("1103 틀림", "1103", True), ("1008 맞음", "1008", False), ("1008 틀림", "1008", True)]
+    groups = [(f"{m} {'틀림' if wrong else '맞음'}", m, wrong) for m in tune_ms + val_ms for wrong in (False, True)]
     out("| 특징 | " + " | ".join(g[0] for g in groups) + " |")
     out("|---|" + "---|" * len(groups))
     for k in keys:
@@ -687,53 +712,44 @@ def cmd_analyze(a):
             f"카메라 사이(정답끼리) ncc0 {fmt(float(np.median([x['x_ncc0_band'] for x in xr])))} "
             f"이동 {fmt(float(np.median([x['x_shift_m'] for x in xr])))} m")
 
-    # 2) 단일 특징 교차 확인
-    out("\n## 단일 특징: 한 회차로 문턱을 고르고 다른 회차에서 확인 (통과 / 틀린 통과, 기존 판정 위에 AND)")
-    out("문턱 = 조율 회차에서 틀린 통과가 0이 되는 가장 느슨한 값 (여유 없음).")
-    out("| 특징 | 방향 | 1103 조율 문턱 | 1103 | → 1008 | 1008 조율 문턱 | 1008 | → 1103 | 전체 조율 문턱 | 전체 |")
-    out("|---|---|---|---|---|---|---|---|---|---|")
+    # 2) 단일 특징: 학습/조율 회차로만 문턱을 고르고 검증 회차에서 확인 (검증 회차로 고르는 표는 만들지 않는다, G4)
+    tune_txt, val_txt = ", ".join(tune_ms), ", ".join(val_ms) or "없음"
+    out(f"\n## 단일 특징: {tune_txt}로 문턱을 고르고 {val_txt}에서 확인 (통과 / 틀린 통과, 기존 판정 위에 AND)")
+    out("문턱 = 조율 회차에서 틀린 통과가 0이 되는 가장 느슨한 값 (여유 없음). 검증 회차로는 고르지 않는다.")
+    out(f"| 특징 | 방향 | 조율 문턱 | 조율 ({tune_txt}) | → 확인 ({val_txt}) |")
+    out("|---|---|---|---|---|")
     b = {m: tb.count([], sel[m]) for m in sel}
-    out(f"| (기존 판정) | | | {b['1103'][0]}/{b['1103'][1]} | {b['1008'][0]}/{b['1008'][1]} | | {b['1008'][0]}/{b['1008'][1]} | "
-        f"{b['1103'][0]}/{b['1103'][1]} | | {b['all'][0]}/{b['all'][1]} |")
+    out(f"| (기존 판정) | | | {b['tune'][0]}/{b['tune'][1]} | {b['val'][0]}/{b['val'][1]} |")
     for k, d in CANDIDATES + DIAG:
-        row = [k, sym(d)]
-        for tm, cm in (("1103", "1008"), ("1008", "1103")):
-            thr = tune_single(tb, sel[tm], k, d)
-            if thr is None:
-                row += ["-", "-", "-"]
-                continue
-            rt, rc = tb.count([(k, d, thr)], sel[tm]), tb.count([(k, d, thr)], sel[cm])
-            row += [f"{thr:.3f}", f"{rt[0]}/{rt[1]}", f"{rc[0]}/{rc[1]}"]
-        thr = tune_single(tb, sel["all"], k, d)
-        ra = tb.count([(k, d, thr)], sel["all"]) if thr is not None else None
-        row += [fmt(thr, 3), f"{ra[0]}/{ra[1]}" if ra else "-"]
-        out("| " + " | ".join(row) + " |")
+        thr = tune_single(tb, sel["tune"], k, d)
+        if thr is None:
+            out(f"| {k} | {sym(d)} | - | - | - |")
+            continue
+        rt, rv = tb.count([(k, d, thr)], sel["tune"]), tb.count([(k, d, thr)], sel["val"])
+        out(f"| {k} | {sym(d)} | {fmt(thr, 3)} | {rt[0]}/{rt[1]} | {rv[0]}/{rv[1]} |")
 
-    # 3) 두 특징 AND
+    # 3) 두 특징 AND: 마찬가지로 조율 회차로만 고른다
     pool = [c for c in CANDIDATES if c[0] != "confidence"]
-    for tm, cm in (("1103", "1008"), ("1008", "1103"), ("all", None)):
-        rows = []
-        for f1, f2 in itertools.combinations(pool, 2):
-            if f1[0] == f2[0]:
-                continue
-            best = tune_pair(tb, sel[tm], f1, f2)
-            if best is None:
-                continue
-            rule = [(f1[0], f1[1], best[0]), (f2[0], f2[1], best[1])]
-            rc = tb.count(rule, sel[cm]) if cm else (0, 0)
-            rows.append((f1, f2, best, rc))
-        rows.sort(key=lambda r: (r[3][1], -(r[2][2] + r[3][0])))
-        title = f"{tm}으로 조율, {cm}에서 확인" if cm else "두 회차 모두로 조율 (확인 없음, 낙관적)"
-        out(f"\n## 두 특징 AND - {title} (상위 20)")
-        out("| 규칙 | 조율 통과 | 확인 통과/틀림 |")
-        out("|---|---|---|")
-        for f1, f2, best, rc in rows[:20]:
-            out(f"| {f1[0]} {sym(f1[1])} {best[0]:.3f} AND {f2[0]} {sym(f2[1])} {best[1]:.3f} | {best[2]} | "
-                f"{(str(rc[0]) + '/' + str(rc[1])) if cm else '-'} |")
+    rows = []
+    for f1, f2 in itertools.combinations(pool, 2):
+        if f1[0] == f2[0]:
+            continue
+        best = tune_pair(tb, sel["tune"], f1, f2)
+        if best is None:
+            continue
+        rule = [(f1[0], f1[1], best[0]), (f2[0], f2[1], best[1])]
+        rows.append((f1, f2, best, tb.count(rule, sel["val"]) if val_ms else None))
+    rows.sort(key=lambda r: ((r[3] or (0, 0))[1], -(r[2][2] + (r[3] or (0, 0))[0])))
+    out(f"\n## 두 특징 AND - {tune_txt}로 조율, {val_txt}에서 확인 (상위 20)")
+    out("| 규칙 | 조율 통과 | 확인 통과/틀림 |")
+    out("|---|---|---|")
+    for f1, f2, best, rc in rows[:20]:
+        out(f"| {f1[0]} {sym(f1[1])} {best[0]:.3f} AND {f2[0]} {sym(f2[1])} {best[1]:.3f} | {best[2]} | "
+            f"{f'{rc[0]}/{rc[1]}' if rc else '-'} |")
 
     # 4) 물리 문턱
     out("\n## 물리 문턱만 (데이터로 고르지 않음: 높이 1~5 m, 코트 밖, |roll| ≤ 5°, 두 축 비 ≤ 1.15, 화각 45~90°)")
-    for m in ("1103", "1008"):
+    for m in tune_ms + val_ms:
         out(f"- {m}: 통과/틀린 통과 {tb.count(PHYSICS_RULE, sel[m])} (기존 {b[m]})")
 
     for text in a.rule or []:

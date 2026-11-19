@@ -141,6 +141,32 @@ def check_purpose(match, purpose, splits):
     return role
 
 
+def eval_purpose(match, tuning=False):
+    """평가 스크립트 한 번의 목적. 설정·문턱을 고르는 실행이면 "tune", 결과만 보는 실행이면 검증 회차는 "val",
+    그 밖은 "report"."""
+    if tuning:
+        return "tune"
+    return "val" if role_of(match, read_splits()) == "val" else "report"
+
+
+def use_match(match, purpose, files, extra=None):
+    """평가 스크립트 공통 (G4): 목적이 회차 역할에 맞는지 확인하고 usage_log.jsonl에 남긴다.
+    검증/잠금 회차를 tune/train에 쓰려 하면 SystemExit."""
+    try:
+        check_purpose(match, purpose, read_splits())
+    except ValueError as e:
+        raise SystemExit(f"{e}. 설정·문턱 실험은 학습 회차({', '.join(read_splits().get('train', []))})로 하세요") from e
+    return log_usage(match, purpose, files, extra)
+
+
+def log_eval(script, cams, match=None):
+    """결과만 보는 평가 스크립트의 사용 기록. 회차 = 인자 > 환경변수 FUTSAL_MATCH > 기본 (calib_core.match_dir)."""
+    from calib_core import match_dir
+    folder = match_dir(match)
+    m = os.path.basename(folder)
+    return use_match(m, eval_purpose(m), [os.path.join(folder, f"calib_cam{n}.json") for n in cams], {"script": script})
+
+
 def _sha(path):
     if not path or not os.path.exists(path):
         return None

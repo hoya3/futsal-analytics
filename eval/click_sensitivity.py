@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from calib_core import click_landmarks, click_residuals_px, front_facing, manual_result, to_world  # noqa: E402
 from court import spec_of  # noqa: E402
 from court_map import load_anchor, pixel_to_court  # noqa: E402
-from harness import ZONES, zone_of  # noqa: E402
+from harness import ZONES, log_eval, zone_of  # noqa: E402
 from refine import project  # noqa: E402
 
 SIZE = (1920, 1080)
@@ -99,6 +99,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     from calib_core import match_dir
     for m in a.matches:
+        log_eval("click_sensitivity", (1, 2), m)  # G4: 클릭 과정의 민감도만 본다 (설정을 고르지 않음)
         for n in (1, 2):
             cal = load_anchor(n, match_dir(m))
             rms = noise_rms(cal, a.sigma, a.trials)

@@ -17,6 +17,7 @@ from calib_core import Source, draw_lines, draw_overlay, out_path  # noqa: E402
 from court import spec_of  # noqa: E402
 from court_map import homographies_at, load  # noqa: E402
 from eval_auto import error_m, truth_segment  # noqa: E402
+from harness import log_eval  # noqa: E402
 
 
 def parse_times(args):
@@ -32,6 +33,7 @@ def parse_times(args):
 
 def main(args):
     n = int(args[args.index("--cam") + 1]) if "--cam" in args else 1
+    log_eval("preview_auto", [n])  # G4: 눈으로 확인만 한다, eval/usage_log.jsonl
     cal = load(n)
     spec = spec_of(cal)
     src = Source(cal["video"])
