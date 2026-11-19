@@ -176,6 +176,7 @@ def main():
             raise SystemExit(f"{m} cam{n}: 시간별 캘리브레이션이 없습니다 (FUTSAL_MATCH={m} python track.py {n})")
         names = [k for k, _ in keypoints(spec)]
         source = Source(cal["video"])
+        size = (int(source.cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(source.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))  # 라벨 정규화용 실제 크기
         times = np.arange(a.step / 2, source.duration, a.step)
         if a.limit:
             times = times[np.linspace(0, len(times) - 1, a.limit).astype(int)]
@@ -185,13 +186,13 @@ def main():
             seg = usable_segment(cal, t)
             if seg is None:
                 continue
-            kp = project_keypoints(seg, cal["half"], n, spec, t=t, match=m)
+            kp = project_keypoints(seg, cal["half"], n, spec, size, t=t, match=m)
             if cal.get("mirror"):
-                _, kp = canonical(None, kp)
-            line = yolo_line(kp)
+                _, kp = canonical(None, kp, size)
+            line = yolo_line(kp, size)
             frame = source.frame_at(t) if line else None
             if frame is not None and cal.get("mirror"):
-                frame, _ = canonical(frame, kp)
+                frame, _ = canonical(frame, kp, size)
             if frame is None:
                 continue
             stem, s = f"{m}_cam{n}_{t:07.1f}", split_of(t)

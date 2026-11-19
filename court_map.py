@@ -48,7 +48,7 @@ def load(n, out_dir=None):
     with open(sync_path, encoding="utf-8") as f:
         sync = json.load(f)
     name = sync["cameras"][str(n)]
-    if os.path.basename(cal["video"]) == name:  # 동기화 영상으로 직접 추적한 결과는 이미 그 시각이다
+    if file_name(cal["video"]) == name:  # 동기화 영상으로 직접 추적한 결과는 이미 그 시각이다
         return cal
     entry = sync["videos"][name]
     return to_sync_time(cal, sibling_path(cal["video"], name), entry["source_time_of_output_0_s"], entry["duration_s"])
@@ -58,6 +58,11 @@ def sibling_path(path, name):
     """같은 폴더의 다른 파일. 저장된 경로의 구분자(/ 또는 \\)를 따른다: JSON은 다른 OS에서 만든 경로일 수 있다."""
     cut = max(path.rfind("/"), path.rfind("\\"))
     return path[:cut + 1] + name if cut >= 0 else name
+
+
+def file_name(path):
+    """저장된 경로의 파일 이름. os.path.basename은 Linux에서 윈도우 경로(\\)를 자르지 못한다."""
+    return path[max(path.rfind("/"), path.rfind("\\")) + 1:]
 
 
 def to_sync_time(cal, video_path, source_time_of_output_0, duration):

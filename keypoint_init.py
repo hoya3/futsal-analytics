@@ -41,15 +41,14 @@ CAMERA_MAX_LOG_RATIO = 0.18  # 두 축 스케일 비 1.2 이내
 CAMERA_HEIGHT_M = (1.0, 5.0)  # 삼각대 위의 폰
 CAMERA_HFOV_DEG = (45.0, 90.0)  # 폰 기본(비광각) 렌즈
 
-_model = None
+_models = {}  # 경로별: 다른 경로를 주면 처음 불러온 모델을 돌려주지 않는다 (모델 A/B 비교)
 
 
 def load_model(path=MODEL_PATH):
-    global _model
-    if _model is None:
+    if path not in _models:
         from ultralytics import YOLO
-        _model = YOLO(path)
-    return _model
+        _models[path] = YOLO(path)
+    return _models[path]
 
 
 def detect(frame, model=None, imgsz=960):

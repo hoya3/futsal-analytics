@@ -1475,3 +1475,26 @@ def test_eval_pool_times_skip_windows_spanning_a_camera_move():
                         {"t0": 500.0, "t1": 1000.0, "source": "auto", "H_near": eye, "H_far": eye}]}
     times = ea.pool_times(cal, 1000.0, 200)
     assert times and not any(t < 500.0 < t + ea.WINDOW for t in times)
+
+
+def test_court_map_file_name_handles_both_separators():
+    """저장된 경로가 다른 OS에서 만들어졌어도 파일 이름을 뽑는다 (os.path.basename은 Linux에서 \를 못 자른다)."""
+    from court_map import file_name
+
+    assert file_name(r"D:\videos\1008\a_sync.mp4") == "a_sync.mp4"
+    assert file_name("/mnt/d/videos/a_sync.mp4") == "a_sync.mp4"
+    assert file_name("a_sync.mp4") == "a_sync.mp4"
+
+
+def test_eval_autocal_refuses_to_overwrite_result_with_other_settings(tmp_path):
+    """--runs 10 같은 짧은 시험 실행이 300회 기준 결과를 몰래 덮어쓰지 않는다."""
+    from types import SimpleNamespace
+
+    import eval_autocal as ea
+
+    path = tmp_path / "autocal_model_1008.json"
+    a = SimpleNamespace(cams=[1, 2], pool=15, windows=5, runs=300, noise=1.5, seed=0, force=False)
+    assert ea.settings_diff(str(path), a) == ""  # 파일 없음
+    path.write_text(json.dumps({"settings": vars(a)}), encoding="utf-8")
+    assert ea.settings_diff(str(path), a) == ""  # 같은 설정
+    assert ea.settings_diff(str(path), SimpleNamespace(**{**vars(a), "runs": 10})) == "runs 300 -> 10"

@@ -502,6 +502,7 @@ def main():
     ap.add_argument("--runs", type=int, default=300, help="시점 부분집합 세션 수")
     ap.add_argument("--noise", type=float, default=1.5, help="oracle 키포인트 잡음 (px, 표준편차)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--force", action="store_true", help="파일 이름에 안 들어가는 설정(--pool, --runs 등)이 다른 기존 결과도 덮어쓴다")
     ap.add_argument("--anchor-w", type=float, default=None,
                     help=f"가까운 쪽 키포인트 앵커 비중 (기본 keypoint_init.ANCHOR_W={ki.ANCHOR_W}, 0이면 앵커 없음, 정수로 반올림)")
     ap.add_argument("--far-anchor-w", type=float, default=None,
@@ -535,6 +536,14 @@ def main():
     if model is not None and not a.no_detect_cache:
         DETECT_CACHE = DetectCache()
     suffix = variant_suffix(a)
+    if not a.force:  # 오래 도는 기준 결과(예: --runs 300)를 짧은 시험 실행이 몰래 덮어쓰지 않게, 시작 전에 확인
+        for mode in modes:
+            extra = seg_noise_suffix(SEG_NOISE) if mode == "segoracle" else ""
+            for match in a.match:
+                path = os.path.join(ROOT, "out", f"autocal_{mode}_{match}{suffix}{extra}.json")
+                diff = settings_diff(path, a)
+                if diff:
+                    raise SystemExit(f"{path}에 다른 설정의 결과가 있습니다 ({diff}). 덮어쓰려면 --force")
     with variant(a.anchor_w, a.far_anchor_w, a.radii):
         print(f"설정: {effective_variant()}", flush=True)
         if set(modes) & set(SEG_MODES):
@@ -556,6 +565,22 @@ def main():
         print(f"검출 캐시: 적중 {DETECT_CACHE.hits}, 새로 검출 {DETECT_CACHE.misses}")
     if SEG_CACHE is not None:
         print(f"세그멘테이션 캐시: 적중 {SEG_CACHE.hits}, 새로 예측 {SEG_CACHE.misses}")
+
+
+RESULT_KEYS = ("cams", "pool", "windows", "runs", "noise", "seed")  # 결과 파일 이름에 들어가지 않는 설정
+
+
+def settings_diff(path, a):
+    """기존 결과 파일과 이번 실행의 설정 차이 ("runs 300 -> 10" 형식). 파일이 없거나 같으면 빈 문자열."""
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f).get("settings", {})
+    except (OSError, ValueError):
+        return ""
+    new = vars(a)
+    return ", ".join(f"{k} {old[k]} -> {new[k]}" for k in RESULT_KEYS if k in old and old[k] != new[k])
 
 
 def _json_default(o):

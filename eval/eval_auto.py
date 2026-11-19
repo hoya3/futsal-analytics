@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from auto_init import auto_calibrate, consensus, median_of  # noqa: E402
 from calib_core import HALF_SIGN, Source  # noqa: E402
 from court import spec_of  # noqa: E402
-from court_map import load  # noqa: E402
+from court_map import homographies_at, load  # noqa: E402
 
 TIMES = tuple(range(200, 3200, 200))  # 15개 시점
 
@@ -57,9 +57,10 @@ def main(args):
             frame = median_of(src, t)
             t0 = time.time()
             r = auto_calibrate(frame, cal["half"], spec)
-            r["t_sec"], r["truth"] = float(t), seg["H_near"]
+            H_true = homographies_at(seg, t + 6)[0]  # 창 가운데 시각의 정답: 구간 안의 느린 밀림(drift)까지 반영
+            r["t_sec"], r["truth"] = float(t), H_true.tolist()
             if r["H_near"] is not None:
-                r["err"] = error_m(r["H_near"], seg["H_near"], cal["half"], spec)
+                r["err"] = error_m(r["H_near"], H_true, cal["half"], spec, frame.shape[1::-1])
             results.append(r)
             valid_times.append(t)
             err = f"err med={r['err'][0]:6.2f} p95={r['err'][1]:6.2f}" if "err" in r else "err -"

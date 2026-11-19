@@ -23,12 +23,13 @@ for n in (1, 2):
     H = np.array(d["H_near"])  # 서클이 하프라인에 걸쳐 있고, 두 호모그래피가 하프라인을 공유한다
     Hc2i = front_facing(np.linalg.inv(H))
     ridge = cv2.GaussianBlur(ridge_map(cv2.imread(out_path(f"frame_cam{n}.jpg"))), (0, 0), 1.5)
+    h, w = ridge.shape[:2]  # 1920x1080에 묶지 않고 실제 프레임 크기 (가장자리 5 px 여유)
     pts = []
     for th in np.radians(np.arange(0, 360, 3)):
         rs = np.linspace(1.8, 4.2, 97)  # 가정한 3 m 원 주변의 탐색 반지름 (m)
         world = np.c_[rs * np.cos(th), rs * np.sin(th)]
         px, depth = project(Hc2i, world)
-        if (depth <= 0).any() or (px < 5).any() or (px[:, 0] > 1914).any() or (px[:, 1] > 1074).any():
+        if (depth <= 0).any() or (px < 5).any() or (px[:, 0] > w - 6).any() or (px[:, 1] > h - 6).any():
             continue
         v = cv2.remap(ridge, px[:, :1].astype(np.float32), px[:, 1:].astype(np.float32), cv2.INTER_LINEAR)[:, 0]
         if v.max() > 0.25:

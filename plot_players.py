@@ -31,9 +31,17 @@ def to_canvas(xy, geo):
 
 
 def main(path, t=None, bg=out_path("topdown.jpg")):
-    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
     if t is not None:
         rows = [r for r in rows if abs(float(r["t"]) - t) < 0.1]
+    if not rows:
+        raise SystemExit(f"표시할 행이 없습니다 ({path}{f', t={t}' if t is not None else ''})")
+    canvas = cv2.imread(bg)
+    if canvas is None:
+        raise SystemExit(f"배경 그림을 읽을 수 없습니다: {bg} (먼저 python topdown.py)")
+    for r in rows:  # cam이 1, 2가 아닌 행도 빈 코트 좌표로 남긴다
+        r["X_m"], r["Y_m"] = "", ""
     cals = {n: load(n) for n in (1, 2)}
     geo = Canvas(spec_of(cals[1]))
     for n in (1, 2):
@@ -44,7 +52,6 @@ def main(path, t=None, bg=out_path("topdown.jpg")):
                 known = math.isfinite(X) and math.isfinite(Y)
                 r["X_m"], r["Y_m"] = (round(float(X), 2), round(float(Y), 2)) if known else ("", "")
 
-    canvas = cv2.imread(bg)
     canvas = (canvas * 0.6).astype(np.uint8)  # 점이 잘 보이도록 배경을 어둡게
     for r in sorted(rows, key=lambda r: float(r["t"])):
         if r["X_m"] == "":

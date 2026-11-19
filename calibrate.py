@@ -164,10 +164,13 @@ class Calibrator:
         return manual_json(self.result, self.clicks, self.lms, self.half, self.spec, video, self.t, self.mirror)
 
     def save(self, out_json, video=None):
-        cv2.imwrite(out_json.replace("H_", "frame_").replace(".json", ".jpg"), self.frame)
+        # 파일 이름만 바꾼다: 경로 전체를 replace하면 폴더 이름의 "H_"까지 바뀌어 없는 폴더에 저장된다
+        folder, name = os.path.split(out_json)
+        stem = os.path.splitext(name)[0]
+        cv2.imwrite(os.path.join(folder, stem.replace("H_", "frame_", 1) + ".jpg"), self.frame)
         with open(out_json, "w", encoding="utf-8") as f:
             json.dump(self.to_json(video), f, indent=2)
-        cv2.imwrite(out_json.replace(".json", "_overlay.jpg"), self.render())
+        cv2.imwrite(os.path.join(folder, stem + "_overlay.jpg"), self.render())
 
 
 def review_auto(n, path, half, spec):

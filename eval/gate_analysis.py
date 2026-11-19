@@ -302,7 +302,8 @@ def cmd_solve(a):
     with ea.variant(aw, faw, None):
         log(f"설정 {tag}: {ea.effective_variant()}")
         for match in a.match:
-            data["cams"] = [c for c in data["cams"] if c["match"] != match]
+            # 이번에 다시 푸는 카메라만 뺀다: "--cams 1"로 다시 풀 때 cam2 결과까지 지우지 않게
+            data["cams"] = [c for c in data["cams"] if not (c["match"] == match and c["cam"] in a.cams)]
             for n in a.cams:
                 res, ra, rr = solve_camera(match, n, model, log)
                 data["cams"].append(res)
